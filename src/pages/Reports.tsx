@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { TierBadge } from '../components/TierBadge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import {
   FileText,
@@ -32,6 +32,7 @@ export const Reports: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [sharedStatus, setSharedStatus] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   const reportRef = useRef<HTMLDivElement>(null);
 
@@ -47,21 +48,117 @@ export const Reports: React.FC = () => {
   const exportPDF = async () => {
     if (!reportRef.current) return;
     setIsExporting(true);
+    setErrorToast(null);
+
     try {
       const canvas = await html2canvas(reportRef.current, {
         scale: 2,
         useCORS: true,
-        backgroundColor: '#FBF8F3',
+        allowTaint: false,
+        backgroundColor: '#FFFFFF',
+        ignoreElements: (element) => {
+          // If a satellite image blocks or taints the capture, ignore only that image
+          if (
+            element.tagName === 'IMG' &&
+            ((element as HTMLImageElement).src.includes('arcgis') ||
+              (element as HTMLImageElement).src.includes('World_Imagery') ||
+              (element as HTMLElement).getAttribute('alt')?.toLowerCase().includes('satellite'))
+          ) {
+            return true;
+          }
+          return false;
+        },
+        onclone: (clonedDoc) => {
+          // Canvas helper to convert any CSS color string (oklch, color-mix, lab, etc.) to standard rgb/rgba
+          const colorCanvas = clonedDoc.createElement('canvas');
+          colorCanvas.width = 1;
+          colorCanvas.height = 1;
+          const ctx = colorCanvas.getContext('2d');
+
+          const toRgb = (colorStr: string): string => {
+            if (!colorStr || typeof colorStr !== 'string') return colorStr;
+            if (
+              !colorStr.includes('oklch') &&
+              !colorStr.includes('color-mix') &&
+              !colorStr.includes('lab') &&
+              !colorStr.includes('lch')
+            ) {
+              return colorStr;
+            }
+            if (!ctx) return '#1B2A38';
+            try {
+              ctx.fillStyle = '#000000';
+              ctx.fillStyle = colorStr;
+              return ctx.fillStyle;
+            } catch {
+              return '#1B2A38';
+            }
+          };
+
+          const colorRegex =
+            /(color-mix\((?:[^()]+|\([^()]*\))*\)|oklch\([^)]+\)|lab\([^)]+\)|lch\([^)]+\))/g;
+
+          // 1. Sanitize style tags in cloned document to replace oklch/color-mix
+          clonedDoc.querySelectorAll('style').forEach((styleTag) => {
+            if (
+              styleTag.textContent &&
+              (styleTag.textContent.includes('oklch') || styleTag.textContent.includes('color-mix'))
+            ) {
+              styleTag.textContent = styleTag.textContent.replace(colorRegex, (match) =>
+                toRgb(match)
+              );
+            }
+          });
+
+          // 2. Convert any oklch/color-mix computed colors to rgb on the cloned copy only
+          const elements = clonedDoc.querySelectorAll('*');
+          const colorProps = [
+            'color',
+            'background-color',
+            'border-top-color',
+            'border-right-color',
+            'border-bottom-color',
+            'border-left-color',
+            'outline-color',
+            'fill',
+            'stroke',
+            'box-shadow',
+          ];
+
+          elements.forEach((node) => {
+            const htmlEl = node as HTMLElement;
+            if (!htmlEl.style) return;
+            const style = window.getComputedStyle(htmlEl);
+            colorProps.forEach((prop) => {
+              const val = style.getPropertyValue(prop);
+              if (
+                val &&
+                (val.includes('oklch') ||
+                  val.includes('color-mix') ||
+                  val.includes('lab') ||
+                  val.includes('lch'))
+              ) {
+                const converted = val.replace(colorRegex, (match) => toRgb(match));
+                htmlEl.style.setProperty(prop, converted, 'important');
+              }
+            });
+          });
+        },
       });
+
       const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
+      const JsPdfConstructor =
+        typeof jsPDF === 'function' ? jsPDF : (jsPDF as any).jsPDF || (jsPDF as any).default;
+      const pdf = new JsPdfConstructor('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`GuardianGrid_${currentCity.id}_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+      pdf.save('GuardianGrid-report.pdf');
     } catch (err) {
       console.error('Failed to generate PDF:', err);
+      setErrorToast('Failed to generate PDF. Please try again or use the Print button.');
+      setTimeout(() => setErrorToast(null), 5000);
     } finally {
       setIsExporting(false);
     }
@@ -367,6 +464,14 @@ Scoring driven by GuardianGrid's expert-weighted additive index on Open-Meteo an
           <span>Verified via Open-Meteo & OpenStreetMap APIs</span>
         </div>
       </div>
+
+      {/* Small Error Toast if capture fails */}
+      {errorToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-[#991B1B] text-white text-xs px-4 py-3 rounded-xl shadow-lg border border-red-700 flex items-center gap-2 animate-fadeIn">
+          <ShieldAlert className="w-4 h-4 shrink-0" />
+          <span>{errorToast}</span>
+        </div>
+      )}
     </div>
   );
 };
