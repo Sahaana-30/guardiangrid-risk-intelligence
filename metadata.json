@@ -1,0 +1,6 @@
+{
+  "name": "GuardianGrid",
+  "description": "AI-powered environmental risk intelligence web app for water-body safety across coastal beaches, lakes, rivers, and reservoirs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

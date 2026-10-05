@@ -1,0 +1,358 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-cream: #F6F1E7;
+    --surface: #FBF8F3;
+    --surface-alt: #E9E1D3;
+    --brand-ocean: #0F766E;
+    --brand-ocean-light: #14958A;
+    --brand-ocean-dark: #0B5A54;
+    --brand-navy: #1E3A8A;
+    --brand-copper: #B5654A;
+    --brand-ink: #1B2A38;
+    --brand-secondary: #5B687A;
+    --risk-low: #2F855A;
+    --risk-med: #E9A03B;
+    --risk-high: #D65A4A;
+    --risk-severe: #991B1B;
+  }
+
+  body {
+    background-color: var(--bg-cream);
+    color: var(--brand-ink);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-serif-heading {
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+}
+
+/* Subtle atmospheric background glow */
+.bg-mesh-glow {
+  background:
+    radial-gradient(circle at 10% 10%, rgba(15, 118, 110, 0.07) 0%, transparent 45%),
+    radial-gradient(circle at 90% 15%, rgba(30, 58, 138, 0.06) 0%, transparent 40%),
+    radial-gradient(circle at 85% 85%, rgba(181, 101, 74, 0.05) 0%, transparent 40%),
+    #F6F1E7;
+}
+
+/* Glassmorphism Card Style matching screenshot */
+.glass-card {
+  background: rgba(251, 248, 243, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(233, 225, 211, 0.85);
+  box-shadow: 0 4px 20px -2px rgba(27, 42, 56, 0.05), 0 2px 6px -1px rgba(27, 42, 56, 0.03);
+}
+
+.glass-card-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.glass-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -4px rgba(27, 42, 56, 0.09), 0 4px 12px -2px rgba(27, 42, 56, 0.04);
+  border-color: rgba(20, 149, 138, 0.3);
+}
+
+/* Glass Dark Panel */
+.glass-dark {
+  background: rgba(11, 42, 56, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #FFFFFF;
+}
+
+/* Map container styling */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #0f1c24;
+}
+
+/* Pulse animation for High / Severe risk */
+@keyframes danger-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(214, 90, 74, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(214, 90, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(214, 90, 74, 0);
+  }
+}
+
+.pulse-high-risk {
+  animation: danger-pulse 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Leaflet Glass Map Popup */
+.glass-map-popup .leaflet-popup-content-wrapper {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 1.25rem !important;
+}
+.glass-map-popup .leaflet-popup-content {
+  margin: 0 !important;
+  line-height: inherit !important;
+}
+.glass-map-popup .leaflet-popup-tip-container {
+  display: none !important;
+}
+
+/* App-wide Card Hover Lift */
+.card-hover-lift {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease;
+}
+.card-hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px -4px rgba(27, 42, 56, 0.08), 0 4px 10px -2px rgba(27, 42, 56, 0.04);
+}
+
+/* Floating bob animation */
+@keyframes float-slow {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.animate-float-slow {
+  animation: float-slow 4.5s ease-in-out infinite;
+}
+
+/* Word-by-word headline reveal with rising mask & blur-to-sharp */
+@keyframes word-reveal {
+  0% {
+    opacity: 0;
+    filter: blur(10px);
+    transform: translateY(24px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0px);
+    transform: translateY(0px);
+  }
+}
+
+.word-reveal-item {
+  display: inline-block;
+  animation: word-reveal 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Fade In animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* Newsreader Serif Font for Headline & Numbers */
+.font-newsreader {
+  font-family: 'Newsreader', Georgia, serif;
+}
+
+/* Newsreader Serif Font for Headline & Numbers */
+.font-newsreader {
+  font-family: 'Newsreader', Georgia, serif;
+}
+
+/* 1. Satellite Ken Burns Slow Drift (scale 1 to 1.1 plus a small pan, 20s, alternating) */
+@keyframes satellitePanDrift {
+  0% {
+    transform: scale(1.0) translate(0%, 0%);
+  }
+  100% {
+    transform: scale(1.10) translate(-2.5%, -1.8%);
+  }
+}
+
+.animate-satellite-pan {
+  animation: satellitePanDrift 20s ease-in-out infinite alternate;
+  transform-origin: center center;
+}
+
+/* 2. Water-light shimmer of wavy streaks (8-14% opacity, diagonal, 14s seamless loop) */
+@keyframes waterWaveShimmer {
+  0% {
+    background-position: 0px 0px;
+    opacity: 0.08;
+  }
+  50% {
+    opacity: 0.14;
+  }
+  100% {
+    background-position: 280px 280px;
+    opacity: 0.08;
+  }
+}
+
+.animate-water-shimmer {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0px,
+    rgba(255, 255, 255, 0.45) 12px,
+    rgba(20, 184, 166, 0.35) 24px,
+    transparent 42px,
+    transparent 70px
+  );
+  background-size: 280px 280px;
+  animation: waterWaveShimmer 14s linear infinite;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+/* 3. Cream-to-image edge undulation (undulates ~20px over 9s like a soft tide line) */
+@keyframes tideLineUndulate {
+  0% {
+    transform: translateX(0px);
+  }
+  50% {
+    transform: translateX(20px);
+  }
+  100% {
+    transform: translateX(0px);
+  }
+}
+
+.animate-tide-line {
+  animation: tideLineUndulate 9s ease-in-out infinite;
+}
+
+/* 4. Two soft teal and sand glows drifting slowly (25s) behind the cream areas */
+@keyframes glowDriftTeal {
+  0% {
+    transform: translate(0px, 0px) scale(1.0);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate(24px, -28px) scale(1.18);
+    opacity: 0.85;
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1.0);
+    opacity: 0.55;
+  }
+}
+
+@keyframes glowDriftSand {
+  0% {
+    transform: translate(0px, 0px) scale(1.0);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translate(-28px, 26px) scale(1.22);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1.0);
+    opacity: 0.45;
+  }
+}
+
+.animate-glow-teal {
+  animation: glowDriftTeal 25s ease-in-out infinite alternate;
+}
+
+.animate-glow-sand {
+  animation: glowDriftSand 25s ease-in-out infinite alternate;
+}
+
+/* 5. Glass Advisory Card floats 5px up and down (7s) */
+@keyframes cardFloat5px {
+  0% {
+    transform: translateY(0px);
+  }
+  100% {
+    transform: translateY(-5px);
+  }
+}
+
+.animate-card-float {
+  animation: cardFloat5px 7s ease-in-out infinite alternate;
+}
+
+/* 6. Card hover lift 4px with soft easing (0.6-0.9s, no bounce) */
+.card-lift-4px {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s ease;
+}
+.card-lift-4px:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 14px 28px -4px rgba(27, 42, 56, 0.10), 0 4px 12px -2px rgba(27, 42, 56, 0.05);
+}
+
+/* 7. Strip of live site chips marquee (scrolls sideways slowly, pauses on hover) */
+@keyframes marqueeScroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee-strip {
+  display: flex;
+  width: max-content;
+  animation: marqueeScroll 38s linear infinite;
+}
+
+.animate-marquee-strip:hover {
+  animation-play-state: paused;
+}
+
+/* Gentle Hero Elements Fade Up on Load */
+@keyframes heroFadeUp {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-fade-up {
+  animation: heroFadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Turn off all motion when prefers-reduced-motion is on */
+@media (prefers-reduced-motion: reduce) {
+  .animate-satellite-pan,
+  .animate-water-shimmer,
+  .animate-tide-line,
+  .animate-glow-teal,
+  .animate-glow-sand,
+  .animate-card-float,
+  .animate-marquee-strip,
+  .card-lift-4px,
+  .hero-fade-up,
+  .animate-float-slow,
+  .word-reveal-item,
+  .animate-fadeIn {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
