@@ -98,92 +98,95 @@ export const MapPage: React.FC = () => {
           className="h-full w-full"
         />
 
-        {searchResults.length > 0 && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 w-80 sm:w-96 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-[#E9E1D3] p-2 space-y-1">
-            <div className="text-[10px] uppercase font-bold text-[#5B687A] px-3 py-1">
-              Matching Sites & Places
+        {/* Overlays positioned as siblings above Leaflet with z-index >= 1000 and pointer-events: none on wrapper */}
+        <div className="absolute inset-0 z-[1000] pointer-events-none overflow-hidden">
+          {searchResults.length > 0 && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 w-80 sm:w-96 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-[#E9E1D3] p-2 space-y-1 pointer-events-auto">
+              <div className="text-[10px] uppercase font-bold text-[#5B687A] px-3 py-1">
+                Matching Sites & Places
+              </div>
+              {searchResults.map((res) => (
+                <button
+                  key={res.id}
+                  onClick={() => handleSelectLocation(res)}
+                  className="w-full text-left px-3 py-2 text-xs rounded-xl hover:bg-[#F6F1E7] transition-colors flex items-center justify-between"
+                >
+                  <span className="font-medium text-[#1B2A38] truncate">{res.name}</span>
+                  <span className="text-[10px] text-[#0F766E] font-semibold shrink-0 ml-2">
+                    {res.isLocal ? 'Monitored Site' : 'Geocoded'}
+                  </span>
+                </button>
+              ))}
             </div>
-            {searchResults.map((res) => (
-              <button
-                key={res.id}
-                onClick={() => handleSelectLocation(res)}
-                className="w-full text-left px-3 py-2 text-xs rounded-xl hover:bg-[#F6F1E7] transition-colors flex items-center justify-between"
-              >
-                <span className="font-medium text-[#1B2A38] truncate">{res.name}</span>
-                <span className="text-[10px] text-[#0F766E] font-semibold shrink-0 ml-2">
-                  {res.isLocal ? 'Monitored Site' : 'Geocoded'}
-                </span>
-              </button>
-            ))}
+          )}
+
+          {panelOpen && (
+            <div className="absolute top-5 left-5 pointer-events-auto transition-all duration-300">
+              <MapLayerPanel
+                layers={activeLayers}
+                onToggleLayer={toggleLayer}
+                filterType={filterType}
+                setFilterType={setFilterType}
+                filterRisk={filterRisk}
+                setFilterRisk={setFilterRisk}
+                timeRange={timeRange}
+                setTimeRange={setTimeRange}
+              />
+            </div>
+          )}
+
+          <div className="absolute top-5 right-5 flex flex-col gap-2.5 pointer-events-auto">
+            <button
+              onClick={() => setPanelOpen(!panelOpen)}
+              title="Toggle Map Layers Panel"
+              className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105 pointer-events-auto"
+            >
+              <Layers className="w-4 h-4 text-[#0F766E]" />
+            </button>
+
+            <button
+              onClick={resetToCityCenter}
+              title="Recenter on current city"
+              className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105 pointer-events-auto"
+            >
+              <Crosshair className="w-4 h-4 text-[#0F766E]" />
+            </button>
+
+            <button
+              onClick={() => setZoomLevel((z) => Math.min(18, z + 1))}
+              title="Zoom In"
+              className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105 pointer-events-auto"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => setZoomLevel((z) => Math.max(8, z - 1))}
+              title="Zoom Out"
+              className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105 pointer-events-auto"
+            >
+              <Minus className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => {
+                if (!document.fullscreenElement) {
+                  document.documentElement.requestFullscreen();
+                } else {
+                  document.exitFullscreen();
+                }
+              }}
+              title="Toggle Fullscreen"
+              className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105 pointer-events-auto"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </button>
           </div>
-        )}
 
-        {panelOpen && (
-          <div className="absolute top-5 left-5 z-20 transition-all duration-300">
-            <MapLayerPanel
-              layers={activeLayers}
-              onToggleLayer={toggleLayer}
-              filterType={filterType}
-              setFilterType={setFilterType}
-              filterRisk={filterRisk}
-              setFilterRisk={setFilterRisk}
-              timeRange={timeRange}
-              setTimeRange={setTimeRange}
-            />
-          </div>
-        )}
-
-        <div className="absolute top-5 right-5 z-20 flex flex-col gap-2.5">
-          <button
-            onClick={() => setPanelOpen(!panelOpen)}
-            title="Toggle Map Layers Panel"
-            className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105"
-          >
-            <Layers className="w-4 h-4 text-[#0F766E]" />
-          </button>
-
-          <button
-            onClick={resetToCityCenter}
-            title="Recenter on current city"
-            className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105"
-          >
-            <Crosshair className="w-4 h-4 text-[#0F766E]" />
-          </button>
-
-          <button
-            onClick={() => setZoomLevel((z) => Math.min(18, z + 1))}
-            title="Zoom In"
-            className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={() => setZoomLevel((z) => Math.max(8, z - 1))}
-            title="Zoom Out"
-            className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105"
-          >
-            <Minus className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={() => {
-              if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen();
-              } else {
-                document.exitFullscreen();
-              }
-            }}
-            title="Toggle Fullscreen"
-            className="p-3 bg-white/95 backdrop-blur-md hover:bg-white text-[#1B2A38] rounded-2xl shadow-lg border border-[#E9E1D3] transition-all hover:scale-105"
-          >
-            <Maximize2 className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="absolute bottom-2 left-4 z-20 pointer-events-none">
-          <div className="text-[10px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md shadow-xs">
-            Satellite: Esri World Imagery & Labels • Hydro-Meteo: Open-Meteo Live API
+          <div className="absolute bottom-2 left-4 pointer-events-none">
+            <div className="text-[10px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md shadow-xs">
+              Satellite: Esri World Imagery & Labels • Hydro-Meteo: Open-Meteo Live API
+            </div>
           </div>
         </div>
       </div>

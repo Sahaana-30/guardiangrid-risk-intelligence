@@ -29,7 +29,7 @@ export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
   setTimeRange,
 }) => {
   return (
-    <div className="w-64 sm:w-72 bg-[#FBF8F3]/95 backdrop-blur-md rounded-2xl border border-[#E9E1D3] shadow-xl p-4 text-[#1B2A38] space-y-4">
+    <div className="w-64 sm:w-72 min-w-[240px] bg-[#FBF8F3] rounded-2xl border border-[#E9E1D3] shadow-xl p-4 text-[#1B2A38] space-y-4 select-none">
       <div className="flex items-center justify-between pb-2 border-b border-[#E9E1D3]">
         <span className="text-xs uppercase tracking-wider font-semibold text-[#5B687A] flex items-center gap-1.5">
           <Layers className="w-3.5 h-3.5 text-[#0F766E]" />
