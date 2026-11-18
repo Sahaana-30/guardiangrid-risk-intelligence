@@ -3,6 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import { nexconnRouter } from './server/nexconnRoutes';
+import { emergencyRouter } from './server/emergencyRoutes';
 
 dotenv.config();
 
@@ -12,7 +14,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+app.use('/api/nexconn', nexconnRouter);
+app.use('/api/emergency', emergencyRouter);
 
 // API Route for Guardian Analyst with Gemini 2.5 Flash
 app.post('/api/analyst', async (req, res) => {
@@ -32,7 +36,14 @@ app.post('/api/analyst', async (req, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
 
     // Format concise context for Gemini
     const sitesSummary = (context?.sites || [])
@@ -63,8 +74,9 @@ GUIDELINES:
 - Provide a clear recreational safety recommendation (e.g. Safe, Caution, or Do Not Enter).
 - Keep response under 300 words.`;
 
+    const modelName = 'gemini-3.1-flash-lite';
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-lite',
+      model: modelName,
       contents: prompt,
     });
 
@@ -72,7 +84,7 @@ GUIDELINES:
 
     return res.json({
       text,
-      modelUsed: 'gemini-2.5-flash-lite',
+      modelUsed: modelName,
       isRuleBased: false,
     });
   } catch (error: any) {
@@ -82,6 +94,11 @@ GUIDELINES:
       error: error?.message || 'Gemini API call failed',
     });
   }
+});
+
+// JSON 404 guard for unmatched /api/* routes (prevents SPA HTML fallback)
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'API route not found' });
 });
 
 // Production or Vite Dev Middleware

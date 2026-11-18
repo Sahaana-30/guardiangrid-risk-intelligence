@@ -19,8 +19,13 @@ import {
   X,
   RefreshCw,
   Compass,
+  MessageSquare,
+  ShieldAlert,
+  Siren,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useNexconn } from '../context/NexconnContext';
+import { useEmergency } from '../context/EmergencyContext';
 import { CITIES } from '../config';
 import { OfflineBanner } from './OfflineBanner';
 
@@ -33,6 +38,9 @@ const navItems = [
   { path: '/clusters', label: 'Clustering', icon: GitFork },
   { path: '/fairness', label: 'Fairness Analysis', icon: Scale },
   { path: '/analyst', label: 'Guardian Analyst', icon: Bot },
+  { path: '/command', label: 'Incident Command', icon: ShieldAlert },
+  { path: '/messages', label: 'Messages', icon: MessageSquare },
+  { path: '/sos', label: 'Public SOS', icon: Siren },
   { path: '/reports', label: 'Intelligence Reports', icon: FileText },
 ];
 
@@ -60,6 +68,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const location = useLocation();
   const navigate = useNavigate();
 
+  const { totalUnreadCount } = useNexconn();
+  const { unverifiedCount } = useEmergency();
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
@@ -104,7 +114,29 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                     }`}
                   >
                     <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-[#5B687A]'}`} />
-                    <span>{item.label}</span>
+                    <span className="flex-1">{item.label}</span>
+                    {item.path === '/command' && unverifiedCount > 0 && (
+                      <span
+                        className={`px-1.5 py-0.5 min-w-[18px] text-center rounded-full text-[10px] font-bold leading-none ${
+                          isActive
+                            ? 'bg-white text-[#0F766E]'
+                            : 'bg-[#D65A4A] text-white'
+                        }`}
+                      >
+                        {unverifiedCount}
+                      </span>
+                    )}
+                    {item.path === '/messages' && totalUnreadCount > 0 && (
+                      <span
+                        className={`px-1.5 py-0.5 min-w-[18px] text-center rounded-full text-[10px] font-bold leading-none ${
+                          isActive
+                            ? 'bg-white text-[#0F766E]'
+                            : 'bg-[#D65A4A] text-white'
+                        }`}
+                      >
+                        {totalUnreadCount}
+                      </span>
+                    )}
                   </NavLink>
                 );
               })}
@@ -317,7 +349,18 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                       }`}
                     >
                       <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-[#5B687A]'}`} />
-                      <span>{item.label}</span>
+                      <span className="flex-1">{item.label}</span>
+                      {item.path === '/messages' && totalUnreadCount > 0 && (
+                        <span
+                          className={`px-1.5 py-0.5 min-w-[18px] text-center rounded-full text-[10px] font-bold leading-none ${
+                            isActive
+                              ? 'bg-white text-[#0F766E]'
+                              : 'bg-[#D65A4A] text-white'
+                          }`}
+                        >
+                          {totalUnreadCount}
+                        </span>
+                      )}
                     </NavLink>
                   );
                 })}

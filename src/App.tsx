@@ -1,7 +1,11 @@
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
+import { NexconnProvider } from './context/NexconnContext';
+import { EmergencyProvider } from './context/EmergencyContext';
 import { AppShell } from './components/AppShell';
+import { IncomingCallPopup } from './components/comms/IncomingCallPopup';
+import { ActiveCallModal } from './components/comms/ActiveCallModal';
 
 import { Landing } from './pages/Landing';
 import { Dashboard } from './pages/Dashboard';
@@ -17,17 +21,26 @@ import { Reports } from './pages/Reports';
 import { Incidents } from './pages/Incidents';
 import { Methodology } from './pages/Methodology';
 import { Settings } from './pages/Settings';
+import { Messages } from './pages/Messages';
+import { CommandCenter } from './pages/CommandCenter';
+import { PublicSOS } from './pages/PublicSOS';
 
 export default function App() {
   return (
     <AppProvider>
-      <HashRouter>
-        <Routes>
-          {/* Landing page: No sidebar, clean full hero */}
-          <Route path="/" element={<Landing />} />
+      <NexconnProvider>
+        <EmergencyProvider>
+          <HashRouter>
+          <Routes>
+            {/* Landing page: No sidebar, clean full hero */}
+            <Route path="/" element={<Landing />} />
 
-          {/* Risk Map page: TopNav variant from screenshot panel 3 */}
-          <Route path="/map" element={<MapPage />} />
+            {/* Public Emergency SOS (standalone QR-accessible public page, no admin sidebar) */}
+            <Route path="/sos" element={<PublicSOS />} />
+            <Route path="/sos/:cellId" element={<PublicSOS />} />
+
+            {/* Risk Map page: TopNav variant from screenshot panel 3 */}
+            <Route path="/map" element={<MapPage />} />
 
           {/* Core App Pages wrapped in AppShell with sidebar */}
           <Route
@@ -127,6 +140,22 @@ export default function App() {
             }
           />
           <Route
+            path="/messages"
+            element={
+              <AppShell>
+                <Messages />
+              </AppShell>
+            }
+          />
+          <Route
+            path="/command"
+            element={
+              <AppShell>
+                <CommandCenter />
+              </AppShell>
+            }
+          />
+          <Route
             path="/settings"
             element={
               <AppShell>
@@ -138,7 +167,11 @@ export default function App() {
           {/* Catch-all redirect */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </HashRouter>
+        <IncomingCallPopup />
+        <ActiveCallModal />
+        </HashRouter>
+        </EmergencyProvider>
+      </NexconnProvider>
     </AppProvider>
   );
 }
