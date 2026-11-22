@@ -1,8 +1,61 @@
-import type { RescueCell, ResponderProfile } from '../src/types/emergency';
+import type { RegionSummary, RescueCell, ResponderProfile } from '../src/types/emergency.ts';
+
+export const INDIA_REGIONS: Array<Omit<RegionSummary, 'organizationId'>> = [
+  {
+    id: 'reg-india-chennai',
+    code: 'TN-CHE',
+    slug: 'chennai',
+    name: 'Chennai',
+    stateOrTerritory: 'Tamil Nadu',
+    country: 'India',
+    lat: 13.0827,
+    lon: 80.2707,
+    vhfChannel: 'VHF Ch 16 / Marine-01',
+    isActive: true,
+  },
+  {
+    id: 'reg-india-mumbai',
+    code: 'MH-MUM',
+    slug: 'mumbai',
+    name: 'Mumbai',
+    stateOrTerritory: 'Maharashtra',
+    country: 'India',
+    lat: 19.0760,
+    lon: 72.8777,
+    vhfChannel: 'VHF Ch 16 / Mumbai-Port',
+    isActive: true,
+  },
+  {
+    id: 'reg-india-goa',
+    code: 'GA-GOA',
+    slug: 'goa',
+    name: 'Goa Coast',
+    stateOrTerritory: 'Goa',
+    country: 'India',
+    lat: 15.4909,
+    lon: 73.8278,
+    vhfChannel: 'VHF Ch 16 / Goa-Coast',
+    isActive: true,
+  },
+  {
+    id: 'reg-india-kerala',
+    code: 'KL-KER',
+    slug: 'kerala',
+    name: 'Kerala Coast',
+    stateOrTerritory: 'Kerala',
+    country: 'India',
+    lat: 8.4004,
+    lon: 76.9787,
+    vhfChannel: 'VHF Ch 16 / Kerala-Coast',
+    isActive: true,
+  },
+];
 
 export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
   {
     id: 'MARINA-C1',
+    regionId: 'reg-india-chennai',
+    regionName: 'Chennai, Tamil Nadu',
     siteId: 'chennai-marina',
     siteName: 'Marina Beach',
     label: 'Marina North — Lighthouse & Anna Square',
@@ -13,9 +66,12 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
     radiusMeters: 650,
     vhfChannel: 'VHF Ch 16 / Marine-01',
     accessLandmark: 'Near Anna Memorial Promenade Gate 2',
+    isProposed: false,
   },
   {
     id: 'MARINA-C2',
+    regionId: 'reg-india-chennai',
+    regionName: 'Chennai, Tamil Nadu',
     siteId: 'chennai-marina',
     siteName: 'Marina Beach',
     label: 'Marina Central — Labour Statue & Swimming Pool',
@@ -26,9 +82,12 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
     radiusMeters: 650,
     vhfChannel: 'VHF Ch 16 / Marine-01',
     accessLandmark: 'Opposite Presidency College Arch',
+    isProposed: false,
   },
   {
     id: 'MARINA-C3',
+    regionId: 'reg-india-chennai',
+    regionName: 'Chennai, Tamil Nadu',
     siteId: 'chennai-marina',
     siteName: 'Marina Beach',
     label: 'Marina South — Gandhi Statue & Foreshore',
@@ -39,9 +98,12 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
     radiusMeters: 700,
     vhfChannel: 'VHF Ch 16 / Marine-02',
     accessLandmark: 'Opposite Gandhi Statue Service Road',
+    isProposed: false,
   },
   {
     id: 'ELLIOT-C1',
+    regionId: 'reg-india-chennai',
+    regionName: 'Chennai, Tamil Nadu',
     siteId: 'chennai-elliots',
     siteName: "Elliot's (Besant Nagar) Beach",
     label: "Elliot's North — Karl Schmidt Memorial",
@@ -52,9 +114,12 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
     radiusMeters: 600,
     vhfChannel: 'VHF Ch 16 / Marine-03',
     accessLandmark: 'Besant Nagar 2nd Avenue Entry',
+    isProposed: false,
   },
   {
     id: 'ELLIOT-C2',
+    regionId: 'reg-india-chennai',
+    regionName: 'Chennai, Tamil Nadu',
     siteId: 'chennai-elliots',
     siteName: "Elliot's (Besant Nagar) Beach",
     label: "Elliot's South — Ashtalakshmi Temple Shore",
@@ -65,9 +130,12 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
     radiusMeters: 600,
     vhfChannel: 'VHF Ch 16 / Marine-03',
     accessLandmark: 'Ashtalakshmi Temple Beach Road',
+    isProposed: false,
   },
   {
     id: 'THIRUVANMIYUR-C1',
+    regionId: 'reg-india-chennai',
+    regionName: 'Chennai, Tamil Nadu',
     siteId: 'chennai-thiruvanmiyur',
     siteName: 'Thiruvanmiyur Beach',
     label: 'Thiruvanmiyur — RTO Beach Access',
@@ -78,7 +146,69 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
     radiusMeters: 800,
     vhfChannel: 'VHF Ch 16 / Marine-04',
     accessLandmark: 'Beach Road West Cross',
+    isProposed: false,
   },
+];
+
+/**
+ * Proposed regional rescue cells for Mumbai, Goa, and Kerala.
+ * Explicitly flagged `isProposed: true` and labelled [DEMO/PROPOSED] until
+ * on-ground coordinates, lifeguard tower coverage, and VHF allocations are verified.
+ */
+export const PROPOSED_REGIONAL_RESCUE_CELLS: RescueCell[] = [
+  {
+    id: 'MUMBAI-JUHU-DEMO1',
+    regionId: 'reg-india-mumbai',
+    regionName: 'Mumbai, Maharashtra',
+    siteId: 'mumbai-juhu',
+    siteName: 'Juhu Beach [DEMO/PROPOSED]',
+    label: '[DEMO/PROPOSED] Juhu Central Shoreline Sector',
+    labelTa: '[முன்மொழிவு/டெமோ] ஜூஹு மத்திய கடற்கரை பகுதி',
+    towerName: 'Proposed Juhu Lifeguard Post (Unverified)',
+    lat: 19.0988,
+    lon: 72.8264,
+    radiusMeters: 750,
+    vhfChannel: 'VHF Ch 16 (Proposed)',
+    accessLandmark: 'Juhu Tara Road Main Beach Entry (Pending Verification)',
+    isProposed: true,
+  },
+  {
+    id: 'GOA-CALANGUTE-DEMO1',
+    regionId: 'reg-india-goa',
+    regionName: 'Goa Coast, Goa',
+    siteId: 'goa-calangute',
+    siteName: 'Calangute Beach [DEMO/PROPOSED]',
+    label: '[DEMO/PROPOSED] Calangute–Baga Shoreline Sector',
+    labelTa: '[முன்மொழிவு/டெமோ] கலங்குட் கடற்கரை பகுதி',
+    towerName: 'Proposed Calangute Lifeguard Tower (Unverified)',
+    lat: 15.5439,
+    lon: 73.7553,
+    radiusMeters: 750,
+    vhfChannel: 'VHF Ch 16 (Proposed)',
+    accessLandmark: 'Calangute Main Beach Access (Pending Verification)',
+    isProposed: true,
+  },
+  {
+    id: 'KERALA-KOVALAM-DEMO1',
+    regionId: 'reg-india-kerala',
+    regionName: 'Kerala Coast, Kerala',
+    siteId: 'kerala-kovalam',
+    siteName: 'Kovalam Lighthouse Beach [DEMO/PROPOSED]',
+    label: '[DEMO/PROPOSED] Kovalam Lighthouse Cove Sector',
+    labelTa: '[முன்மொழிவு/டெமோ] கோவளம் கலங்கரை விளக்கம் கடற்கரை',
+    towerName: 'Proposed Kovalam Coastal Post (Unverified)',
+    lat: 8.3988,
+    lon: 76.9781,
+    radiusMeters: 650,
+    vhfChannel: 'VHF Ch 16 (Proposed)',
+    accessLandmark: 'Lighthouse Beach Promenade (Pending Verification)',
+    isProposed: true,
+  },
+];
+
+export const ALL_INDIA_RESCUE_CELLS: RescueCell[] = [
+  ...CHENNAI_RESCUE_CELLS,
+  ...PROPOSED_REGIONAL_RESCUE_CELLS,
 ];
 
 /**
@@ -89,6 +219,7 @@ export const CHENNAI_RESCUE_CELLS: RescueCell[] = [
 export const INITIAL_SIMULATED_RESPONDERS: ResponderProfile[] = [
   {
     id: 'resp-marina-lead',
+    regionId: 'reg-india-chennai',
     nexconnUserId: 'gg-lifeguard-marina',
     name: 'Marina Lifeguard Lead',
     role: 'Coastal Patrol & Surf Rescue',
@@ -104,6 +235,7 @@ export const INITIAL_SIMULATED_RESPONDERS: ResponderProfile[] = [
   },
   {
     id: 'resp-hydro-field',
+    regionId: 'reg-india-chennai',
     nexconnUserId: 'gg-hydro-field',
     name: 'Hydrology Field Officer',
     role: 'Marine Telemetry & First Aid',
@@ -119,6 +251,7 @@ export const INITIAL_SIMULATED_RESPONDERS: ResponderProfile[] = [
   },
   {
     id: 'resp-dispatch-coord',
+    regionId: 'reg-india-chennai',
     nexconnUserId: 'gg-dispatch-chennai',
     name: 'Coastal Dispatch Control',
     role: 'Emergency Coordinator & Medical Liaison',
@@ -134,6 +267,7 @@ export const INITIAL_SIMULATED_RESPONDERS: ResponderProfile[] = [
   },
   {
     id: 'resp-analyst-support',
+    regionId: 'reg-india-chennai',
     nexconnUserId: 'gg-analyst-ss',
     name: 'Senior Safety Analyst (SS)',
     role: 'Lead Risk Analyst & Reserve Support',

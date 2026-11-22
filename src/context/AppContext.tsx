@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { CITIES, CHENNAI_SEED_SITES, DEFAULT_RISK_WEIGHTS } from '../config';
+import { useWorkspace } from './WorkspaceContext';
 import {
   CityConfig,
   ClusteringResult,
@@ -75,7 +76,12 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { activeWorkspace } = useWorkspace();
+
   const [currentCity, setCurrentCity] = useState<CityConfig>(() => {
+    const wsCityId = activeWorkspace?.geofence?.cityId;
+    const wsCity = wsCityId ? CITIES.find((c) => c.id === wsCityId) : undefined;
+    if (wsCity) return wsCity;
     try {
       const stored = localStorage.getItem('guardiangrid_city');
       if (stored) {
@@ -85,6 +91,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
     return CITIES[0];
   });
+
+  const prevWorkspaceIdRef = useRef<string>(activeWorkspace.id);
+  useEffect(() => {
+    if (prevWorkspaceIdRef.current !== activeWorkspace.id) {
+      prevWorkspaceIdRef.current = activeWorkspace.id;
+      const wsCity = CITIES.find((c) => c.id === activeWorkspace.geofence.cityId);
+      if (wsCity && wsCity.id !== currentCity.id) {
+        setCurrentCity(wsCity);
+        try {
+          localStorage.setItem('guardiangrid_city', wsCity.id);
+        } catch {}
+      }
+    }
+  }, [activeWorkspace.id, activeWorkspace.geofence.cityId, currentCity.id]);
 
   const [dateRange, setDateRange] = useState<'7d' | '30d' | '90d'>('7d');
   const [sites, setSites] = useState<WaterBody[]>(() =>
@@ -99,7 +119,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState<boolean>(!navigator.onLine);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [totalDataPoints, setTotalDataPoints] = useState<number>(12400);
+  const [totalDataPoints, setTotalDataPoints] = useState<number>(0);
 
   const [riskWeights, setRiskWeights] = useState<RiskWeightsConfig>(() => {
     try {
@@ -110,24 +130,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: 'notif-1',
-      title: 'Marina Beach Tier Elevation',
-      message: 'Risk tier elevated to High (78/100) due to swell wave activity.',
-      timestamp: '2 hours ago',
-      tier: 'High',
-      read: false,
-    },
-    {
-      id: 'notif-2',
-      title: 'Elliot Beach Advisory',
-      message: 'Rip current hazard increased (+12 points) during incoming high tide.',
-      timestamp: '5 hours ago',
-      tier: 'Medium',
-      read: false,
-    },
-  ]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
@@ -333,7 +336,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setSiteRisks(risks);
       setSiteForecasts(forecasts);
-      setTotalDataPoints(Math.max(12000, ingestedPointsCount));
+      setTotalDataPoints(ingestedPointsCount);
+
+      const liveAdvisories: NotificationItem[] = [];
+      initialSites.forEach((site) => {
+        const risk = risks.get(site.id);
+        if (risk && risk.environmentalFactors?.isLive !== false && (risk.tier === 'High' || risk.tier === 'Severe')) {
+          const waveTxt =
+            typeof risk.environmentalFactors?.waveHeight === 'number'
+              ? `Wave ${risk.environmentalFactors.waveHeight.toFixed(1)}m`
+              : null;
+          const windTxt =
+            typeof risk.environmentalFactors?.windSpeed === 'number'
+              ? `Wind ${Math.round(risk.environmentalFactors.windSpeed)} km/h`
+              : null;
+          const driverSummary = [waveTxt, windTxt].filter(Boolean).join(', ');
+          liveAdvisories.push({
+            id: `risk-adv-${site.id}`,
+            title: `${site.name} — ${risk.tier} Risk Advisory`,
+            message: `Computed index ${risk.score}/100 via Open-Meteo forecast${driverSummary ? ` (${driverSummary})` : ''}.`,
+            timestamp: 'Latest Open-Meteo sync',
+            tier: risk.tier,
+            read: false,
+          });
+        }
+      });
+      setNotifications(liveAdvisories);
 
       let gdeltIncidents: Incident[] = [];
       try {

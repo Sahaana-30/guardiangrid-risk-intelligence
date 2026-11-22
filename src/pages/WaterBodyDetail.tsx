@@ -6,6 +6,7 @@ import { RiskGauge } from '../components/RiskGauge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
 import { SatelliteThumbnail } from '../components/SatelliteThumbnail';
 import { ShapBars } from '../components/ShapBars';
+import { BackNavButton } from '../components/BackNavButton';
 import { calculateRiskScore, simulateWhatIf } from '../lib/riskModel';
 import {
   Waves,
@@ -19,7 +20,6 @@ import {
   FileText,
   Sliders,
   Sparkles,
-  ArrowLeft,
   AlertTriangle,
   Info,
   Calendar,
@@ -126,7 +126,7 @@ export const WaterBodyDetail: React.FC = () => {
         color: 'text-[#E9A03B] bg-[#E9A03B]/10 border-[#E9A03B]/30',
         icon: AlertTriangle,
         advice: site.hasLifeguard
-          ? 'Moderate risk. Stay close to patrolled zones and monitor changing wind or tide conditions.'
+          ? 'Moderate risk. Stay close to patrolled zones and monitor changing wind, wave, or current conditions.'
           : 'Site is unpatrolled by certified lifeguards. Exercise extreme caution.',
       };
     }
@@ -145,13 +145,7 @@ export const WaterBodyDetail: React.FC = () => {
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Top back navigation & actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <button
-          onClick={() => navigate('/water-bodies')}
-          className="inline-flex items-center gap-2 text-xs font-semibold text-[#5B687A] hover:text-[#0B3B3C] transition"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to All Water Bodies</span>
-        </button>
+        <BackNavButton fallbackPath="/water-bodies" showLabel />
 
         <div className="flex items-center gap-3">
           <button
@@ -197,7 +191,7 @@ export const WaterBodyDetail: React.FC = () => {
               <TierBadge tier={tier} size="md" />
               <span className="text-xs text-stone-300 flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5" />
-                Updated {lastUpdated || 'Live'}
+                Updated {factors.isLive ? lastUpdated || 'Live forecast' : 'Telemetry unavailable'}
               </span>
             </div>
 
@@ -230,7 +224,7 @@ export const WaterBodyDetail: React.FC = () => {
                 {confidence}%
                 <ProvenanceTip
                   source="Open-Meteo & OpenStreetMap"
-                  type="observed"
+                  type="forecast"
                   confidence={confidence}
                 />
               </span>

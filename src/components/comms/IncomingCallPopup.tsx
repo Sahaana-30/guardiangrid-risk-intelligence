@@ -1,11 +1,13 @@
 import React from 'react';
 import { Phone, PhoneOff, Video } from 'lucide-react';
-import { useNexconn } from '../../context/NexconnContext';
+import { useLocation } from 'react-router-dom';
+import { isPublicSafetyRoute, useNexconn } from '../../context/NexconnContext';
 
 export const IncomingCallPopup: React.FC = () => {
+  const location = useLocation();
   const { incomingCall, acceptIncomingCall, rejectIncomingCall } = useNexconn();
 
-  if (!incomingCall) return null;
+  if (isPublicSafetyRoute(location.pathname) || !incomingCall) return null;
 
   const isVideo = incomingCall.mediaType === 'video';
 

@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   CheckCheck,
@@ -7,14 +8,21 @@ import {
   FileText,
   Image as ImageIcon,
   Loader2,
+  Mic,
   Paperclip,
   Phone,
   Send,
+  Square,
   Users,
   Video,
+  X,
 } from 'lucide-react';
 import { useNexconn } from '../../context/NexconnContext';
+import { MedicalHandoffCard } from '../emergency/MedicalHandoffCard';
+import { EmergencyChatCard } from './EmergencyChatCard';
 import type { CommsMessage } from '../../types/comms';
+
+const HANDOFF_MARKER_RE = /^\[GG_MEDICAL_HANDOFF:([^:\]]+):([^\]]+)\]/;
 
 interface ChatThreadProps {
   onBackMobile?: () => void;
@@ -46,6 +54,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
     sendText,
     sendImage,
     sendFile,
+    sendVoice,
     notifyTyping,
     startCall,
     getOperatorName,
@@ -54,14 +63,54 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordStreamRef = useRef<MediaStream | null>(null);
+  const recordChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<number | null>(null);
+
+  const cleanupRecording = useCallback(() => {
+    if (recordTimerRef.current) {
+      window.clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    const rec = mediaRecorderRef.current;
+    if (rec) {
+      rec.ondataavailable = null;
+      rec.onstop = null;
+      if (rec.state !== 'inactive') {
+        try {
+          rec.stop();
+        } catch {
+          // Ignore recorder stop error during teardown
+        }
+      }
+      mediaRecorderRef.current = null;
+    }
+    if (recordStreamRef.current) {
+      recordStreamRef.current.getTracks().forEach((t) => t.stop());
+      recordStreamRef.current = null;
+    }
+    recordChunksRef.current = [];
+    setIsRecording(false);
+    setRecordSeconds(0);
+  }, []);
 
   useEffect(() => {
     setSendError(null);
-  }, [selectedChannel?.key]);
+    cleanupRecording();
+  }, [selectedChannel?.key, cleanupRecording]);
+
+  useEffect(() => {
+    return () => {
+      cleanupRecording();
+    };
+  }, [cleanupRecording]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -114,7 +163,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
         await msg.rawMessage.downloadMedia();
         return;
       }
-      const targetUrl = msg.fileUrl || msg.imageUrl;
+      const targetUrl = msg.fileUrl || msg.imageUrl || msg.audioUrl;
       if (targetUrl) {
         const a = document.createElement('a');
         a.href = targetUrl;
@@ -125,6 +174,110 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
       }
     } catch (err: any) {
       setSendError(err?.message || 'Unable to download attachment.');
+    }
+  };
+
+  const stopVoiceRecording = useCallback(
+    (shouldSend: boolean) => {
+      if (recordTimerRef.current) {
+        window.clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      const recorder = mediaRecorderRef.current;
+      if (!recorder) {
+        setIsRecording(false);
+        setRecordSeconds(0);
+        return;
+      }
+
+      recorder.onstop = async () => {
+        const stream = recordStreamRef.current;
+        stream?.getTracks().forEach((t) => t.stop());
+        recordStreamRef.current = null;
+        mediaRecorderRef.current = null;
+
+        const chunks = recordChunksRef.current;
+        recordChunksRef.current = [];
+        setIsRecording(false);
+        setRecordSeconds(0);
+
+        if (!shouldSend || chunks.length === 0) return;
+
+        const mimeType = recorder.mimeType || 'audio/webm';
+        const ext = mimeType.includes('mp4')
+          ? 'm4a'
+          : mimeType.includes('ogg')
+            ? 'ogg'
+            : 'webm';
+        const blob = new Blob(chunks, { type: mimeType });
+        const voiceFile = new File([blob], `voice-${Date.now()}.${ext}`, { type: mimeType });
+
+        setSending(true);
+        setSendError(null);
+        try {
+          await sendVoice(voiceFile);
+        } catch (err: any) {
+          setSendError(
+            err?.message ||
+              'Voice note upload failed. Ensure Nexconn media storage is enabled.'
+          );
+        } finally {
+          setSending(false);
+        }
+      };
+
+      if (recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+    },
+    [sendVoice]
+  );
+
+  const startVoiceRecording = async () => {
+    setSendError(null);
+    if (!selectedChannel || connectionStatus !== 'connected') {
+      setSendError('Connect Nexconn session before recording a voice note.');
+      return;
+    }
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setSendError('Microphone recording requires a secure HTTPS browser context.');
+      return;
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      setSendError('Audio recording (MediaRecorder) is not supported in this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordStreamRef.current = stream;
+      recordChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          recordChunksRef.current.push(ev.data);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordSeconds(0);
+      recordTimerRef.current = window.setInterval(() => {
+        setRecordSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err: any) {
+      const name = err?.name || '';
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        setSendError(
+          'Microphone permission denied. Allow microphone access in browser settings.'
+        );
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        setSendError('No microphone detected on this device.');
+      } else {
+        setSendError(err?.message || 'Unable to start microphone recording.');
+      }
     }
   };
 
@@ -263,6 +416,15 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
                   : `data:image/jpeg;base64,${msg.thumbnailBase64}`
                 : undefined);
 
+            const handoffMatch =
+              msg.handoffMarker ||
+              (msg.kind === 'text'
+                ? (() => {
+                    const m = msg.text.match(HANDOFF_MARKER_RE);
+                    return m ? { reportId: m[1], incidentId: m[2] } : undefined;
+                  })()
+                : undefined);
+
             return (
               <div
                 key={msg.messageId}
@@ -274,6 +436,29 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
                   </span>
                 )}
 
+                {handoffMatch ? (
+                  <div className="w-full max-w-xl">
+                    <MedicalHandoffCard
+                      incidentId={handoffMatch.incidentId}
+                      embeddedReportId={handoffMatch.reportId}
+                      compact={true}
+                      canReviewAndShare={false}
+                    />
+                  </div>
+                ) : msg.sosCard || msg.sbarCard ? (
+                  <div className="w-full max-w-md space-y-1">
+                    <EmergencyChatCard sosCard={msg.sosCard} sbarCard={msg.sbarCard} />
+                    <div className="text-[10px] text-[#5B687A] px-1 flex items-center gap-1">
+                      <span>{formatMessageTime(msg.sentTime)}</span>
+                      {isMine &&
+                        (msg.sentStatus === 'read' || (msg.readCount ?? 0) > 0 ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-[#0F766E]" aria-label="Read" />
+                        ) : (
+                          <Check className="w-3 h-3" aria-label="Sent" />
+                        ))}
+                    </div>
+                  </div>
+                ) : (
                 <div
                   className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-3.5 py-2.5 text-xs shadow-2xs ${
                     isMine
@@ -299,6 +484,31 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
                         <Download className="w-3 h-3" />
                         <span>Open / Download</span>
                       </button>
+                    </div>
+                  ) : msg.kind === 'voice' ? (
+                    <div className="space-y-1.5 min-w-[210px]">
+                      <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Mic className="w-3.5 h-3.5" />
+                          <span>
+                            HD Voice Note{msg.audioDuration ? ` (${msg.audioDuration}s)` : ''}
+                          </span>
+                        </span>
+                      </div>
+                      {msg.audioUrl ? (
+                        <audio controls src={msg.audioUrl} className="max-w-full h-8" />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleDownload(msg)}
+                          className={`inline-flex items-center gap-1 text-[10px] underline ${
+                            isMine ? 'text-white/85' : 'text-[#0F766E]'
+                          }`}
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>Download Voice Note</span>
+                        </button>
+                      )}
                     </div>
                   ) : msg.kind === 'file' ? (
                     <div className="flex items-center gap-2.5 min-w-[190px]">
@@ -341,13 +551,18 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
                   >
                     <span>{formatMessageTime(msg.sentTime)}</span>
                     {isMine &&
-                      (msg.sentStatus === 'read' || (msg.readCount ?? 0) > 0 ? (
+                      (msg.sentStatus === 'sending' ? (
+                        <Loader2 className="w-3 h-3 animate-spin" aria-label="Sending" />
+                      ) : msg.sentStatus === 'failed' ? (
+                        <AlertTriangle className="w-3 h-3 text-rose-300" aria-label="Failed" />
+                      ) : msg.sentStatus === 'read' || (msg.readCount ?? 0) > 0 ? (
                         <CheckCheck className="w-3.5 h-3.5 text-emerald-200" aria-label="Read" />
                       ) : (
                         <Check className="w-3 h-3" aria-label="Sent" />
                       ))}
                   </div>
                 </div>
+                )}
               </div>
             );
           })
@@ -399,7 +614,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
 
         <button
           type="button"
-          disabled={!isConnected || uploadProgress !== null}
+          disabled={!isConnected || uploadProgress !== null || isRecording}
           onClick={() => fileInputRef.current?.click()}
           title="Attach file"
           className="p-2 rounded-xl border border-[#E9E1D3] bg-white text-[#5B687A] hover:text-[#0F766E] transition-colors disabled:opacity-45"
@@ -407,25 +622,58 @@ export const ChatThread: React.FC<ChatThreadProps> = ({ onBackMobile }) => {
           <Paperclip className="w-4 h-4" />
         </button>
 
+        {!isRecording ? (
+          <button
+            type="button"
+            disabled={!isConnected || uploadProgress !== null || sending}
+            onClick={() => void startVoiceRecording()}
+            title="Record HD voice note"
+            className="p-2 rounded-xl border border-[#E9E1D3] bg-white text-[#5B687A] hover:text-[#0F766E] transition-colors disabled:opacity-45"
+          >
+            <Mic className="w-4 h-4" />
+          </button>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => stopVoiceRecording(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#D65A4A] text-white text-xs font-semibold"
+            >
+              <Square className="w-3 h-3 fill-current" />
+              <span>Send ({recordSeconds}s)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => stopVoiceRecording(false)}
+              title="Cancel recording"
+              className="p-2 rounded-xl border border-[#E9E1D3] bg-white text-[#5B687A] hover:text-[#1B2A38]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         <input
           type="text"
           value={draft}
-          disabled={!isConnected}
+          disabled={!isConnected || isRecording}
           onChange={(e) => {
             setDraft(e.target.value);
             notifyTyping();
           }}
           placeholder={
-            isConnected
-              ? `Message ${selectedChannel.name}...`
-              : 'Connect Nexconn session to send messages'
+            isRecording
+              ? `Recording HD voice note (${recordSeconds}s)...`
+              : isConnected
+                ? `Message ${selectedChannel.name}...`
+                : 'Connect Nexconn session to send messages'
           }
           className="flex-1 px-3.5 py-2 text-xs bg-white border border-[#E9E1D3] rounded-xl text-[#1B2A38] placeholder:text-[#5B687A]/60 focus:outline-none focus:border-[#0F766E] disabled:opacity-60"
         />
 
         <button
           type="submit"
-          disabled={!isConnected || !draft.trim() || sending}
+          disabled={!isConnected || !draft.trim() || sending || isRecording}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F766E] text-white text-xs font-semibold hover:bg-[#0B3B3C] transition-colors disabled:opacity-45"
         >
           {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}

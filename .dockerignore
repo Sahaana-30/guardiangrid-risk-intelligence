@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-server
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.data
+server/data
+coverage
+*.log
+.DS_Store
+HACKATHON_CHANGELOG.md
+DEPLOYMENT.md

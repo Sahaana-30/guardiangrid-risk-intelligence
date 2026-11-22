@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { useAnalyst } from '../context/AnalystContext';
 import { TierBadge } from '../components/TierBadge';
 import { CountUp } from '../components/CountUpStats';
 import { getEsriSatelliteThumbnail, getEsriCoastSatelliteUrl } from '../config';
@@ -8,19 +9,25 @@ import {
   Compass,
   ArrowRight,
   Shield,
-  Activity,
-  Layers,
-  Clock,
   ExternalLink,
   ChevronRight,
   TrendingUp,
+  FlaskConical,
+  Play,
+  Radio,
+  X,
+  Brain,
+  Menu,
 } from 'lucide-react';
 
 export const Landing: React.FC = () => {
   const navigate = useNavigate();
-  const { currentCity, sites, siteRisks, incidents, lastUpdated, totalDataPoints } = useApp();
+  const { currentCity, sites, siteRisks, siteForecasts, incidents, lastUpdated } = useApp();
+  const { aiStatus } = useAnalyst();
 
   const [coastImageError, setCoastImageError] = useState(false);
+  const [demoModalOpen, setDemoModalOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Scroll observer visibility states
   const statsRef = useRef<HTMLDivElement>(null);
@@ -84,7 +91,7 @@ export const Landing: React.FC = () => {
 
   const topSite = sortedSites[0] || sites[0];
   const topRisk = topSite ? siteRisks.get(topSite.id) : null;
-  const topScore = topRisk?.score ?? 45;
+  const topScore = topRisk?.score ?? null;
   const topTier = topRisk?.tier ?? 'Low';
 
   // Count live high-risk & severe locations
@@ -95,11 +102,14 @@ export const Landing: React.FC = () => {
     }).length;
   }, [sites, siteRisks]);
 
-  // City-wide average risk
+  // City-wide average risk from computed site scores
   const avgRisk = useMemo(() => {
-    if (!sites.length) return 45;
-    const sum = sites.reduce((acc, s) => acc + (siteRisks.get(s.id)?.score ?? 45), 0);
-    return Math.round(sum / sites.length);
+    const scored = sites
+      .map((s) => siteRisks.get(s.id)?.score)
+      .filter((score): score is number => typeof score === 'number');
+    if (!scored.length) return null;
+    const sum = scored.reduce((acc, s) => acc + s, 0);
+    return Math.round(sum / scored.length);
   }, [sites, siteRisks]);
 
   // Live formatted time for status line
@@ -115,7 +125,7 @@ export const Landing: React.FC = () => {
 
   // Dynamic Advisory Card configuration based on live tier of highest-risk site
   const advisoryInfo = useMemo(() => {
-    if (topScore >= 85) {
+    if (topScore !== null && topScore >= 85) {
       return {
         title: 'CRITICAL RISK ADVISORY',
         textColor: 'text-red-700',
@@ -142,20 +152,35 @@ export const Landing: React.FC = () => {
     return {
       title: 'HIGHEST CURRENT RISK',
       textColor: 'text-[#0F766E]',
-      badgeLabel: 'Low Risk',
+      badgeLabel: topScore !== null ? 'Low Risk' : 'Syncing',
       badgeStyle: 'bg-[#0F766E]/10 text-[#0F766E] border border-[#0F766E]/20',
     };
   }, [topScore, topTier]);
 
-  // 7-Day Coastal Risk Trajectory computed from live site telemetry
+  // 7-Day Coastal Risk Trajectory aggregated directly from real Open-Meteo site forecasts
   const trendData = useMemo(() => {
-    const days = ['Today', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7'];
-    const offsets = [0, 4, -3, 6, 2, -4, 1];
-    return days.map((day, i) => {
-      const score = Math.min(95, Math.max(15, avgRisk + offsets[i]));
-      return { day, score };
+    const forecasts = Array.from(siteForecasts.values());
+    if (!forecasts.length) return [];
+    const buckets = new Map<number, { label: string; sum: number; count: number }>();
+    forecasts.forEach((f) => {
+      (f.daily || []).slice(0, 7).forEach((d, idx) => {
+        const cur = buckets.get(idx) || {
+          label: idx === 0 ? 'Today' : d.dayName || `Day ${idx + 1}`,
+          sum: 0,
+          count: 0,
+        };
+        cur.sum += d.meanScore ?? d.maxScore;
+        cur.count += 1;
+        buckets.set(idx, cur);
+      });
     });
-  }, [avgRisk]);
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, v]) => ({
+        day: v.label,
+        score: Math.round(v.sum / Math.max(1, v.count)),
+      }));
+  }, [siteForecasts]);
 
   const trendSvgCoords = useMemo(() => {
     const pts = trendData.map((pt, i) => {
@@ -185,8 +210,8 @@ export const Landing: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F6F1E7] text-[#1B2A38] font-sans relative selection:bg-[#0F766E]/20 overflow-x-hidden">
       {/* Navigation Header */}
-      <header className="h-20 px-6 sm:px-12 flex items-center justify-between border-b border-[#E9E1D3]/80 bg-[#FBF8F3]/85 backdrop-blur-md sticky top-0 z-40 transition-colors">
-        <div className="flex items-center gap-3">
+      <header className="h-20 px-4 sm:px-8 lg:px-10 flex items-center justify-between gap-3 border-b border-[#E9E1D3]/80 bg-[#FBF8F3]/90 backdrop-blur-md sticky top-0 z-40 transition-colors">
+        <div className="flex items-center gap-3 shrink-0">
           <div className="w-9 h-9 rounded-xl bg-[#0F766E] text-white flex items-center justify-center shadow-xs">
             <Compass className="w-5 h-5" />
           </div>
@@ -197,38 +222,92 @@ export const Landing: React.FC = () => {
           </div>
         </div>
 
-        <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-[#5B687A]">
-          <button onClick={() => navigate('/')} className="text-[#0F766E] font-semibold">
-            Home
+        <nav className="hidden md:flex items-center gap-3 lg:gap-5 text-xs lg:text-sm font-medium text-[#5B687A] min-w-0">
+          <button onClick={() => navigate('/sos')} className="hover:text-[#0F766E] cursor-pointer transition-colors font-semibold text-[#D65A4A] whitespace-nowrap">
+            Public SOS
           </button>
-          <button onClick={() => navigate('/dashboard')} className="hover:text-[#1B2A38] transition-colors">
-            Dashboard
+          <button onClick={() => navigate('/command')} className="hover:text-[#0F766E] cursor-pointer transition-colors font-semibold text-[#0B3B3C] whitespace-nowrap">
+            Command Center
           </button>
-          <button onClick={() => navigate('/map')} className="hover:text-[#1B2A38] transition-colors">
+          <button onClick={() => navigate('/field-kit')} className="hover:text-[#0F766E] cursor-pointer transition-colors whitespace-nowrap">
+            Field Kit
+          </button>
+          <button onClick={() => navigate('/map')} className="hover:text-[#0F766E] cursor-pointer transition-colors whitespace-nowrap">
             Risk Map
           </button>
-          <button onClick={() => navigate('/forecast')} className="hover:text-[#1B2A38] transition-colors">
-            Forecast
+          <button onClick={() => navigate('/analytics')} className="hover:text-[#0F766E] cursor-pointer transition-colors whitespace-nowrap">
+            Analytics
           </button>
-          <button onClick={() => navigate('/explain')} className="hover:text-[#1B2A38] transition-colors">
-            Explainable AI
-          </button>
-          <button onClick={() => navigate('/analyst')} className="hover:text-[#1B2A38] transition-colors">
-            Analyst
-          </button>
-          <button onClick={() => navigate('/methodology')} className="hover:text-[#1B2A38] transition-colors">
-            Methodology
+          <button
+            onClick={() => navigate('/analyst')}
+            title={
+              aiStatus.available
+                ? 'Open Guardian Analyst (Gemini AI Active)'
+                : aiStatus.reason || 'Open Guardian Analyst (Deterministic Rule Engine Active)'
+            }
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-[#0F766E]/30 bg-white hover:bg-[#0F766E]/5 text-[#0B3B3C] font-semibold cursor-pointer transition-colors whitespace-nowrap shrink-0"
+          >
+            <Brain className="w-3.5 h-3.5 text-[#0F766E]" />
+            <span>Guardian Analyst</span>
+            {aiStatus.available ? (
+              <span className="hidden xl:inline px-1.5 py-0.5 rounded-full bg-[#0F766E]/10 text-[#0F766E] text-[9px] font-bold uppercase tracking-wider leading-none">
+                AI Powered
+              </span>
+            ) : aiStatus.checked ? (
+              <span className="hidden xl:inline px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-bold uppercase tracking-wider leading-none">
+                Rule Engine
+              </span>
+            ) : null}
           </button>
         </nav>
 
-        <button
-          onClick={() => navigate('/dashboard')}
-          className="bg-[#0F766E] hover:bg-[#0B5A54] text-white font-medium px-5 py-2.5 rounded-full text-xs sm:text-sm shadow-md hover:shadow-lg transition-all flex items-center gap-2"
-        >
-          <span>Live Console</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => navigate('/command')}
+            className="hidden sm:flex bg-[#0F766E] hover:bg-[#0B5A54] text-white font-medium px-4 lg:px-5 py-2.5 rounded-full text-xs sm:text-sm shadow-md hover:shadow-lg cursor-pointer transition-all items-center gap-2 focus:outline-none focus:ring-2 focus:ring-[#0F766E]/50 whitespace-nowrap"
+          >
+            <span>Open Command Center</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen((prev) => !prev)}
+            aria-label="Toggle navigation menu"
+            className="md:hidden p-2 rounded-xl border border-[#E9E1D3] bg-white text-[#1B2A38] cursor-pointer"
+          >
+            {mobileNavOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+        </div>
       </header>
+
+      {mobileNavOpen && (
+        <div className="md:hidden bg-[#FBF8F3] border-b border-[#E9E1D3] px-4 py-3 space-y-1.5 sticky top-20 z-30 shadow-md">
+          {[
+            { path: '/sos', label: 'Public SOS', accent: 'text-[#D65A4A] font-semibold' },
+            { path: '/command', label: 'Command Center', accent: 'text-[#0B3B3C] font-semibold' },
+            { path: '/field-kit', label: 'Field Kit', accent: 'text-[#1B2A38]' },
+            { path: '/map', label: 'Risk Map', accent: 'text-[#1B2A38]' },
+            { path: '/analytics', label: 'Analytics', accent: 'text-[#1B2A38]' },
+            {
+              path: '/analyst',
+              label: `Guardian Analyst (${aiStatus.available ? 'AI Powered' : 'Rule Engine'})`,
+              accent: 'text-[#0F766E] font-semibold',
+            },
+          ].map((item) => (
+            <button
+              key={item.path}
+              type="button"
+              onClick={() => {
+                setMobileNavOpen(false);
+                navigate(item.path);
+              }}
+              className={`w-full text-left px-3 py-2 rounded-xl hover:bg-white text-sm ${item.accent}`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* SATELLITE LANDING PAGE HERO SECTION */}
       <section className="px-4 sm:px-6 lg:px-8 pt-4 pb-4 sm:pb-6 max-w-7xl mx-auto">
@@ -245,41 +324,89 @@ export const Landing: React.FC = () => {
                 {/* Eyebrow Label */}
                 <div className="flex items-center gap-2 text-xs font-semibold text-[#5B687A] tracking-wider uppercase">
                   <span className="w-2 h-2 rounded-full bg-[#0F766E] shrink-0" />
-                  <span>LIVE DATA • ENVIRONMENTAL RISK INTELLIGENCE</span>
+                  <span>COASTAL RESCUE &amp; EMERGENCY INTELLIGENCE</span>
                 </div>
 
-                {/* Headline: Newsreader font, "Safer Waters" in teal italic */}
-                <h1 className="font-newsreader text-4xl sm:text-5xl lg:text-[3.5rem] font-medium tracking-tight text-[#1B2A38] leading-[1.12]">
-                  From Data <br className="hidden sm:inline" />
-                  to <span className="italic text-[#0F766E]">Safer Waters</span>
+                {/* Headline: Newsreader font */}
+                <h1 className="font-newsreader text-4xl sm:text-5xl lg:text-[3.25rem] font-medium tracking-tight text-[#1B2A38] leading-[1.12]">
+                  From SOS <br className="hidden sm:inline" />
+                  to <span className="italic text-[#0F766E]">Coordinated Rescue</span>
                 </h1>
 
                 {/* Subtitle Paragraph in Inter */}
                 <p className="text-sm sm:text-base text-[#5B687A] font-normal leading-relaxed max-w-md pt-1">
-                  GuardianGrid combines geospatial satellite analysis and continuous multi-variable Open-Meteo telemetry to predict and prevent water safety hazards before they endanger citizens.
+                  GuardianGrid connects predictive Open-Meteo marine risk mapping with zero-login Citizen 1-Tap SOS, human verification, Nexconn real-time responder war rooms, and AI-assisted SBAR medical handoff.
                 </p>
 
-                {/* Action Buttons */}
-                <div className="flex flex-wrap items-center gap-3 pt-2">
+                {/* Primary Workflow CTAs */}
+                <div className="flex flex-wrap items-center gap-2.5 pt-2">
                   <button
-                    onClick={() => navigate('/map')}
-                    className="bg-[#0F766E] hover:bg-[#0B5A54] text-white px-6 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-medium shadow-sm hover:shadow transition-all flex items-center gap-2 group card-lift-4px"
+                    type="button"
+                    onClick={() => navigate('/command')}
+                    className="bg-[#0F766E] hover:bg-[#0B5A54] text-white px-5 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-semibold shadow-sm hover:shadow transition-all flex items-center gap-2 group card-lift-4px cursor-pointer"
                   >
-                    <span>Explore Live Risk Map</span>
+                    <span>Open Command Center</span>
                     <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
                   </button>
 
                   <button
-                    onClick={() => navigate('/forecast')}
-                    className="px-5 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-medium text-[#1B2A38] bg-white/70 hover:bg-white border border-[#E9E1D3] shadow-xs transition-all card-lift-4px"
+                    type="button"
+                    onClick={() => navigate('/sos')}
+                    className="px-5 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-semibold text-white bg-[#D65A4A] hover:bg-[#B94334] shadow-xs transition-all flex items-center gap-1.5 card-lift-4px cursor-pointer"
                   >
-                    7-Day Heatmap
+                    <span>Public 1-Tap SOS</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate('/map')}
+                    className="px-4 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-medium text-[#1B2A38] bg-white/85 hover:bg-white border border-[#E9E1D3] shadow-xs transition-all card-lift-4px cursor-pointer"
+                  >
+                    Explore Live Risk Map
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate('/analyst')}
+                    className="px-4 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-semibold text-[#0B3B3C] bg-white hover:bg-[#0F766E]/5 border border-[#0F766E]/35 shadow-xs transition-all flex items-center gap-1.5 card-lift-4px cursor-pointer"
+                  >
+                    <Brain className="w-3.5 h-3.5 text-[#0F766E]" />
+                    <span>Guardian Analyst</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate('/forecast')}
+                    className="px-4 py-2.5 sm:py-3 rounded-full text-xs sm:text-sm font-medium text-[#5B687A] hover:text-[#1B2A38] transition-colors cursor-pointer"
+                  >
+                    7-Day Forecast →
+                  </button>
+                </div>
+
+                {/* 5-Step Rescue Workflow Strip */}
+                <div className="pt-3 border-t border-[#E9E1D3]/80 grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-[11px]">
+                  {[
+                    { step: '1. Citizen SOS', to: '/sos', hint: '1-Tap + Tamil/EN' },
+                    { step: '2. Verify Gate', to: '/command?filter=UNVERIFIED', hint: 'Human dispatcher' },
+                    { step: '3. Field Kit', to: '/field-kit', hint: 'GPS + Status CTA' },
+                    { step: '4. Nexconn Room', to: '/command', hint: 'Chat, PTT & Video' },
+                    { step: '5. SBAR Handoff', to: '/medical-handoff', hint: 'Reviewed transfer' },
+                  ].map((item) => (
+                    <button
+                      key={item.step}
+                      type="button"
+                      onClick={() => navigate(item.to)}
+                      className="text-left px-2.5 py-2 rounded-xl bg-white/80 hover:bg-white border border-[#E9E1D3] hover:border-[#0F766E]/40 transition-colors cursor-pointer"
+                    >
+                      <div className="font-bold text-[#0B3B3C] truncate">{item.step}</div>
+                      <div className="text-[10px] text-[#5B687A] truncate">{item.hint}</div>
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {/* Live Telemetry Status Line */}
-              <div className="text-xs text-[#5B687A] font-normal italic pt-2 relative z-10">
+              <div className="text-xs text-[#5B687A] font-normal italic pt-1 relative z-10">
                 {sites.length} sites in {currentCity.name} • Refreshed {displayTime}
               </div>
             </div>
@@ -337,7 +464,7 @@ export const Landing: React.FC = () => {
                   {/* Score Row in Newsreader */}
                   <div className="mt-3 flex items-baseline gap-1.5">
                     <span className="font-newsreader text-3xl sm:text-4xl font-normal text-[#1B2A38]">
-                      {topScore}
+                      {topScore !== null ? topScore : '--'}
                     </span>
                     <span className="text-[10px] sm:text-xs text-[#5B687A] font-semibold uppercase tracking-wider">
                       /100 RISK INDEX
@@ -500,16 +627,17 @@ export const Landing: React.FC = () => {
             <div className="flex items-center gap-3">
               <span className="text-xs text-[#5B687A]">Mean Risk:</span>
               <span className="font-newsreader text-2xl font-bold text-[#0F766E]">
-                {avgRisk}
+                {avgRisk !== null ? avgRisk : '--'}
                 <span className="text-xs font-normal text-[#5B687A]">/100</span>
               </span>
               <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#0F766E]/10 text-[#0F766E] border border-[#0F766E]/20">
-                Continuous Heuristics
+                Open-Meteo Forecast
               </span>
             </div>
           </div>
 
-          {/* SVG Animated Risk Trend Line */}
+          {/* SVG Animated Risk Trend Line from live Open-Meteo forecasts */}
+          {trendData.length > 0 ? (
           <div className="w-full overflow-x-auto">
             <svg
               viewBox="0 0 670 120"
@@ -593,6 +721,11 @@ export const Landing: React.FC = () => {
               ))}
             </svg>
           </div>
+          ) : (
+            <div className="py-8 text-center text-xs text-[#5B687A] border border-dashed border-[#E9E1D3] rounded-2xl bg-[#FBF8F3]/60">
+              7-day Open-Meteo marine forecast is syncing for {currentCity.name}. No synthetic trajectory values are displayed.
+            </div>
+          )}
         </div>
       </section>
 
@@ -733,13 +866,118 @@ export const Landing: React.FC = () => {
           <div className="flex items-center gap-2">
             <Compass className="w-4 h-4 text-[#0F766E]" />
             <span className="font-bold text-[#1B2A38]">GuardianGrid</span>
-            <span>• Environmental Risk Intelligence</span>
+            <span>• Coastal Safety &amp; Emergency Intelligence</span>
           </div>
-          <div>
-            Data sourced live from Open-Meteo, Esri Satellite, GDELT & OpenStreetMap
+          <div className="flex items-center gap-4 flex-wrap justify-center">
+            <span>Data sourced live from Open-Meteo, Esri Satellite, GDELT &amp; OpenStreetMap</span>
+            <button
+              type="button"
+              onClick={() => setDemoModalOpen(true)}
+              className="inline-flex items-center gap-1.5 text-[#0F766E] hover:underline font-medium cursor-pointer"
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span>Training Simulation Walkthrough</span>
+            </button>
           </div>
         </div>
       </footer>
+
+      {/* Training Simulation Walkthrough Modal */}
+      {demoModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="gg-demo-modal-title"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setDemoModalOpen(false);
+          }}
+        >
+          <div className="bg-[#FBF8F3] border border-[#E9E1D3] rounded-3xl p-6 sm:p-7 max-w-xl w-full shadow-2xl space-y-5">
+            <div className="flex items-start justify-between gap-3 border-b border-[#E9E1D3] pb-3">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold uppercase tracking-wider mb-1">
+                  <FlaskConical className="w-3 h-3" />
+                  <span>ISOLATED TRAINING SANDBOX · ZERO REAL ALERTS SENT</span>
+                </div>
+                <h2 id="gg-demo-modal-title" className="font-serif-heading text-xl font-bold text-[#0B3B3C]">
+                  GuardianGrid 10-Stage Training Simulation
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDemoModalOpen(false)}
+                aria-label="Close training guide"
+                className="p-1.5 rounded-lg text-[#5B687A] hover:bg-[#E9E1D3]/50 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="text-xs text-[#5B687A] leading-relaxed space-y-3">
+              <p>
+                Rehearse the complete coastal safety workflow end-to-end as both{' '}
+                <strong className="text-[#1B2A38]">Command Dispatcher</strong> and{' '}
+                <strong className="text-[#1B2A38]">Field Responder</strong> using isolated, repeatable training drill data:
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                {[
+                  '1. Predict & Prevent — Inspect live Open-Meteo marine hazard risk on Risk Map',
+                  '2. Report — Trigger an isolated SIMULATED drill or use Public SOS Sandbox mode',
+                  '3. Verify & Dispatch — Review Human Verification Gate & assign nearest unit',
+                  '4. Communicate — Collaborate in live Nexconn War Room chat & audio/video call',
+                  '5. Field Rescue & Medical Handoff — Update En Route/On Scene & SBAR transfer',
+                  '6. Resolve & Learn — Close drill, inspect timeline & reset drills cleanly anytime',
+                ].map((step) => (
+                  <div
+                    key={step}
+                    className="p-2.5 rounded-xl bg-white border border-[#E9E1D3] text-[#1B2A38] font-medium"
+                  >
+                    {step}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-[#E9E1D3]">
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href="#/field-kit"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#0F766E]/40 bg-white hover:bg-[#0F766E]/5 text-[#0B3B3C] text-xs font-semibold"
+                >
+                  <Radio className="w-3.5 h-3.5 text-[#0F766E]" />
+                  <span>Open Responder Field Kit (2nd Tab)</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDemoModalOpen(false);
+                    navigate('/sos');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[#E9E1D3] bg-white hover:bg-[#F6F1E7] text-xs font-semibold text-[#D65A4A] cursor-pointer"
+                >
+                  <span>Open Public SOS</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDemoModalOpen(false);
+                  navigate('/command?demo=1');
+                }}
+                className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#0F766E] hover:bg-[#0B5A54] text-white text-xs font-bold shadow-xs cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5" />
+                <span>Open Training Sandbox</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

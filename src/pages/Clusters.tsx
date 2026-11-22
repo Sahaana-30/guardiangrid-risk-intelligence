@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { TierBadge } from '../components/TierBadge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   GitFork,
   Layers,
@@ -27,6 +28,8 @@ import {
 
 export const Clusters: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   const { currentCity, sites, siteRisks, clustering } = useApp();
 
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
@@ -54,7 +57,8 @@ export const Clusters: React.FC = () => {
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {isStandalone && <BackNavButton fallbackPath="/analytics" />}
           <GitFork className="w-5 h-5 text-[#0F766E]" />
           <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
             Behavioral Risk Archetypes & Clustering

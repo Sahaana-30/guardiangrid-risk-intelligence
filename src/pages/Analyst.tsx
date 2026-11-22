@@ -1,196 +1,156 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { executeRuleBasedAnalyst, AnalystContext } from '../lib/ruleAnalyst';
-import { TierBadge } from '../components/TierBadge';
+import { useAnalyst } from '../context/AnalystContext';
+import { useWorkspace } from '../context/WorkspaceContext';
+import { DataTrustBadge } from '../components/ProvenanceTip';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   Bot,
   Send,
   Sparkles,
   Clock,
   ShieldCheck,
-  AlertTriangle,
   RotateCcw,
-  CheckCircle2,
   Cpu,
   User,
-  ExternalLink,
+  Lock,
+  MapPin,
+  AlertTriangle,
 } from 'lucide-react';
 
-interface ChatMessage {
-  id: string;
-  sender: 'user' | 'assistant';
-  text: string;
-  timestamp: string;
-  modelUsed?: string;
-  isRuleBased?: boolean;
-  toolsUsed?: string[];
-}
-
 export const Analyst: React.FC = () => {
-  const { currentCity, sites, siteRisks, incidents } = useApp();
-
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'init-1',
-      sender: 'assistant',
-      text: `Hello! I am your GuardianGrid Environmental Intelligence Analyst for ${currentCity.name}, ${currentCity.region}. I monitor real-time marine, weather, flood discharge, and infrastructure safety observations across ${sites.length} water bodies. How can I assist you with water safety intelligence today?`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      modelUsed: 'Guardian Hybrid Engine',
-      isRuleBased: true,
-    },
-  ]);
+  const { currentCity, sites } = useApp();
+  const { activeWorkspace } = useWorkspace();
+  const {
+    messages,
+    isSubmitting,
+    cooldownSeconds,
+    selectedBeach,
+    setSelectedBeach,
+    sendMessage,
+    clearConversation,
+    aiStatus,
+  } = useAnalyst();
 
   const [inputQuery, setInputQuery] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 6-second cooldown timer
-  useEffect(() => {
-    if (cooldownSeconds <= 0) return;
-    const timer = setInterval(() => {
-      setCooldownSeconds((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [cooldownSeconds]);
-
-  // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isSubmitting]);
 
   const quickPrompts = [
     `Is Marina Beach safe for swimming right now?`,
-    `Which sites have high or severe risk warnings today?`,
-    `Explain why Chembarambakkam is at its current risk level`,
-    `Compare coastal beaches vs inland reservoirs in ${currentCity.name}`,
+    `Which beaches have HIGH or CRITICAL risk today and why?`,
+    `My height is 175 cm — is it safe to wade into waist-deep surf at Marina Beach?`,
+    `Summarize active operational incidents and responder readiness in this workspace`,
   ];
 
-  const handleSendMessage = async (queryText: string) => {
-    const textToSend = queryText.trim();
-    if (!textToSend || isSubmitting || cooldownSeconds > 0) return;
-
-    const userMessage: ChatMessage = {
-      id: `usr-${Date.now()}`,
-      sender: 'user',
-      text: textToSend,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
+  const handleSubmit = async (queryText: string) => {
+    const clean = queryText.trim();
+    if (!clean || isSubmitting || cooldownSeconds > 0) return;
     setInputQuery('');
-    setIsSubmitting(true);
-    setCooldownSeconds(6);
-
-    // Build context
-    const analystContext: AnalystContext = {
-      sites: sites.map((s) => {
-        const risk = siteRisks.get(s.id);
-        return {
-          id: s.id,
-          name: s.name,
-          score: risk?.score ?? 40,
-          tier: risk?.tier ?? 'Low',
-          dataConfidence: risk?.dataConfidence ?? 85,
-          environmentalFactors: risk?.environmentalFactors,
-          lifeguardPresent: Boolean(s.hasLifeguard || s.lifeguardPresent),
-          topShapFactors: (risk?.shapValues || []).map((sv) => ({
-            label: sv.label || sv.featureName || 'Factor',
-            value: sv.value ?? sv.hazard ?? 0,
-            unit: sv.unit || '',
-            shap: sv.shap ?? sv.shapContribution ?? 0,
-          })),
-        };
-      }),
-      incidents,
-    };
-
-    try {
-      // First attempt server Gemini route
-      let botResponse: { text: string; modelUsed: string; isRuleBased: boolean; toolsUsed?: string[] } | null = null;
-
-      try {
-        const res = await fetch('/api/analyst', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: textToSend, context: analystContext }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (!data.fallback && data.text) {
-            botResponse = {
-              text: data.text,
-              modelUsed: data.modelUsed || 'Gemini 2.5 Flash-Lite',
-              isRuleBased: false,
-              toolsUsed: ['gemini_contextual_synthesis'],
-            };
-          }
-        }
-      } catch (err) {
-        // Fallback to rule engine
-      }
-
-      // If server failed or no Gemini API key, use deterministic rule-based analyst
-      if (!botResponse) {
-        const ruleRes = executeRuleBasedAnalyst(textToSend, analystContext);
-        botResponse = {
-          text: ruleRes.text,
-          modelUsed: 'Deterministic Safety Engine (Rule-Based Fallback)',
-          isRuleBased: true,
-          toolsUsed: ruleRes.toolsUsed,
-        };
-      }
-
-      const assistantMessage: ChatMessage = {
-        id: `asst-${Date.now()}`,
-        sender: 'assistant',
-        text: botResponse.text,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        modelUsed: botResponse.modelUsed,
-        isRuleBased: botResponse.isRuleBased,
-        toolsUsed: botResponse.toolsUsed,
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (e: any) {
-      const errMessage: ChatMessage = {
-        id: `err-${Date.now()}`,
-        sender: 'assistant',
-        text: 'An error occurred while evaluating the query. GuardianGrid rule analyst is standing by.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isRuleBased: true,
-      };
-      setMessages((prev) => [...prev, errMessage]);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await sendMessage(clean);
   };
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-12">
+    <div className="space-y-5 max-w-5xl mx-auto pb-12">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <Bot className="w-6 h-6 text-[#0F766E]" />
-            <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <BackNavButton fallbackPath="/dashboard" />
+            <div className="w-9 h-9 rounded-xl bg-[#0F766E] text-white flex items-center justify-center shadow-xs">
+              <Bot className="w-5 h-5" />
+            </div>
+            <h1 className="font-serif-heading text-2xl sm:text-3xl font-bold text-[#0B3B3C]">
               Guardian Analyst
             </h1>
+            {aiStatus.available ? (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#0F766E]/10 text-[#0F766E] border border-[#0F766E]/25 text-[10px] font-bold uppercase tracking-wider">
+                <Sparkles className="w-3 h-3" />
+                AI Powered
+              </span>
+            ) : !aiStatus.checked ? (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold uppercase tracking-wider">
+                <Cpu className="w-3 h-3" />
+                Checking AI...
+              </span>
+            ) : (
+              <span
+                title={aiStatus.reason || 'Deterministic Rule Engine Active'}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold uppercase tracking-wider"
+              >
+                <Cpu className="w-3 h-3" />
+                Rule Engine Active
+              </span>
+            )}
           </div>
-          <p className="text-sm text-[#5B687A] mt-1">
-            Real-time conversational risk assistant powered by Gemini 2.5 Flash-Lite with zero-dependency deterministic fallback.
+          <p className="text-xs sm:text-sm text-[#5B687A] mt-1">
+            Grounded coastal safety, drowning prevention, and emergency operations assistant scoped server-side to{' '}
+            <span className="font-semibold text-[#1B2A38]">{activeWorkspace.name}</span>.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#2F855A] animate-pulse"></span>
-          <span className="text-[#5B687A]">Live Context Synced</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white border border-[#E9E1D3] text-xs">
+            <MapPin className="w-3.5 h-3.5 text-[#0F766E]" />
+            <select
+              value={selectedBeach || ''}
+              onChange={(e) => setSelectedBeach(e.target.value || null)}
+              aria-label="Focus beach"
+              className="bg-transparent text-xs text-[#1B2A38] font-medium cursor-pointer focus:outline-none"
+            >
+              <option value="">All {currentCity.name} beaches</option>
+              {sites.map((s) => (
+                <option key={s.id} value={s.name}>
+                  Focus: {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={clearConversation}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[#E9E1D3] bg-white hover:border-[#0F766E]/40 text-xs font-medium text-[#5B687A] hover:text-[#1B2A38] cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-[#0F766E]/40"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Clear conversation</span>
+          </button>
         </div>
       </div>
 
+      {/* Privacy & Grounding Trust Strip */}
+      <div className="rounded-2xl bg-[#FBF8F3] border border-[#E9E1D3] px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#5B687A]">
+        <div className="flex items-center gap-2">
+          <Lock className="w-3.5 h-3.5 text-[#0F766E] shrink-0" />
+          <span>
+            <strong>Session-only privacy:</strong> Personal details stay in this active conversation only, are never stored across sessions, and clear automatically when you switch workspaces.
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <DataTrustBadge
+            classification="derived_analytical"
+            compact
+            source="Server-Derived Workspace Context + Open-Meteo Telemetry"
+            note="Organization and role are derived on the server from your session. In-situ coastal water-level gauges are unavailable."
+          />
+        </div>
+      </div>
+
+      {aiStatus.checked && !aiStatus.available && (
+        <div className="rounded-2xl bg-amber-50 border border-amber-200 px-4 py-2.5 flex items-center gap-2.5 text-xs text-amber-900">
+          <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+          <span>
+            <strong>Deterministic Rule Engine Active:</strong>{' '}
+            {aiStatus.reason || 'Live Gemini synthesis is currently offline. Safety evaluations are computed directly from live Open-Meteo telemetry and SHAP rules without fabricated AI output.'}
+          </span>
+        </div>
+      )}
+
       {/* Chat Container */}
-      <div className="bg-[#FBF8F3] border border-[#E9E1D3] rounded-3xl overflow-hidden shadow-xs flex flex-col h-[640px]">
+      <div className="bg-[#FBF8F3] border border-[#E9E1D3] rounded-3xl overflow-hidden shadow-xs flex flex-col h-[600px]">
         {/* Chat Stream */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {messages.map((m) => {
@@ -200,16 +160,14 @@ export const Analyst: React.FC = () => {
                 key={m.id}
                 className={`flex gap-3 max-w-3xl ${isUser ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
               >
-                {/* Avatar */}
                 <div
                   className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 text-white shadow-xs ${
-                    isUser ? 'bg-[#1E3A8A]' : 'bg-[#0F766E]'
+                    isUser ? 'bg-[#0B3B3C]' : 'bg-[#0F766E]'
                   }`}
                 >
                   {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                 </div>
 
-                {/* Message Bubble */}
                 <div className="space-y-1.5">
                   <div
                     className={`p-4 rounded-2xl text-xs sm:text-sm leading-relaxed whitespace-pre-wrap ${
@@ -222,7 +180,7 @@ export const Analyst: React.FC = () => {
                   </div>
 
                   <div
-                    className={`flex items-center gap-2 text-[10px] text-[#5B687A] px-1 ${
+                    className={`flex items-center gap-2 text-[10px] text-[#5B687A] px-1 flex-wrap ${
                       isUser ? 'justify-end' : 'justify-start'
                     }`}
                   >
@@ -235,6 +193,11 @@ export const Analyst: React.FC = () => {
                           {m.modelUsed}
                         </span>
                       </>
+                    )}
+                    {m.securityGuarded && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">
+                        <ShieldCheck className="w-2.5 h-2.5" /> Tenant Guard
+                      </span>
                     )}
                   </div>
                 </div>
@@ -249,7 +212,7 @@ export const Analyst: React.FC = () => {
               </div>
               <div className="p-4 rounded-2xl bg-white border border-[#E9E1D3] text-xs text-[#5B687A] flex items-center gap-2">
                 <Sparkles className="w-3.5 h-3.5 text-[#0F766E] animate-spin" />
-                <span>Evaluating environmental telemetry and running model inference...</span>
+                <span>Evaluating server-verified workspace status and coastal telemetry...</span>
               </div>
             </div>
           )}
@@ -263,9 +226,10 @@ export const Analyst: React.FC = () => {
           {quickPrompts.map((prompt, idx) => (
             <button
               key={idx}
-              onClick={() => handleSendMessage(prompt)}
+              type="button"
+              onClick={() => void handleSubmit(prompt)}
               disabled={isSubmitting || cooldownSeconds > 0}
-              className="px-3 py-1 text-xs bg-white border border-[#E9E1D3] rounded-full text-[#1B2A38] hover:border-[#0F766E] hover:text-[#0F766E] transition whitespace-nowrap shrink-0 disabled:opacity-50"
+              className="px-3 py-1 text-xs bg-white border border-[#E9E1D3] rounded-full text-[#1B2A38] hover:border-[#0F766E] hover:text-[#0F766E] cursor-pointer transition whitespace-nowrap shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {prompt}
             </button>
@@ -277,7 +241,7 @@ export const Analyst: React.FC = () => {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              handleSendMessage(inputQuery);
+              void handleSubmit(inputQuery);
             }}
             className="flex items-center gap-2"
           >
@@ -285,8 +249,8 @@ export const Analyst: React.FC = () => {
               type="text"
               placeholder={
                 cooldownSeconds > 0
-                  ? `Rate limit cooldown active (${cooldownSeconds}s)...`
-                  : 'Ask about wave conditions, swimming safety, or risk explanation...'
+                  ? `Ready in ${cooldownSeconds}s...`
+                  : 'Ask about beach safety, waves, drowning prevention, or active incidents...'
               }
               value={inputQuery}
               onChange={(e) => setInputQuery(e.target.value)}
@@ -297,7 +261,7 @@ export const Analyst: React.FC = () => {
             <button
               type="submit"
               disabled={!inputQuery.trim() || isSubmitting || cooldownSeconds > 0}
-              className="px-5 py-2.5 text-xs font-semibold rounded-2xl bg-[#0F766E] text-white hover:bg-[#0B5A54] transition shadow-xs disabled:opacity-40 flex items-center gap-2"
+              className="px-5 py-2.5 text-xs font-semibold rounded-2xl bg-[#0F766E] text-white hover:bg-[#0B5A54] cursor-pointer transition shadow-xs disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-[#0F766E]/50"
             >
               {cooldownSeconds > 0 ? (
                 <>
@@ -313,11 +277,11 @@ export const Analyst: React.FC = () => {
             </button>
           </form>
 
-          <div className="flex items-center justify-between text-[11px] text-[#5B687A] px-1">
+          <div className="flex items-center justify-between text-[11px] text-[#5B687A] px-1 flex-wrap gap-2">
             <span>
-              Calls rate-limited to 1 per 6s. Gemini 2.5 Flash-Lite or transparent local rule fallback.
+              Advisory intelligence only — for an active emergency, call <strong>112</strong> or alert lifeguards immediately.
             </span>
-            <span className="font-semibold text-[#0F766E]">No synthetic data</span>
+            <span className="font-semibold text-[#0F766E]">Server-grounded · No fabricated readings</span>
           </div>
         </div>
       </div>

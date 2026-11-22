@@ -1,3 +1,5 @@
+import { apiUrl } from './apiBase';
+
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public source?: string) {
     super(message);
@@ -23,6 +25,7 @@ export async function fetchJson<T = any>(
     cacheTtlMs = 1000 * 60 * 30,
     ...init
   } = options;
+  const resolvedUrl = url.startsWith('/api/') ? apiUrl(url) : url;
 
   if (init.method === undefined || init.method === 'GET') {
     const cached = memoryCache.get(url);
@@ -50,7 +53,7 @@ export async function fetchJson<T = any>(
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(resolvedUrl, {
         ...init,
         signal: controller.signal,
       });

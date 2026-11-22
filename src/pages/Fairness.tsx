@@ -1,6 +1,8 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ProvenanceTip } from '../components/ProvenanceTip';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   Scale,
   ShieldCheck,
@@ -23,6 +25,8 @@ import {
 } from 'recharts';
 
 export const Fairness: React.FC = () => {
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   const { currentCity, sites, siteRisks, fairness } = useApp();
 
   const audit = fairness;
@@ -61,7 +65,8 @@ export const Fairness: React.FC = () => {
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {isStandalone && <BackNavButton fallbackPath="/analytics" />}
           <Scale className="w-5 h-5 text-[#0F766E]" />
           <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
             Civil Safety Fairness & Equity Audit

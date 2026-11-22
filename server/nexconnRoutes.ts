@@ -3,6 +3,9 @@ import express from 'express';
 import { Configuration } from '@nexconn/server-sdk/configuration.ts';
 import { UserManagementApi } from '@nexconn/server-sdk/api.ts';
 import { ApiException } from '@nexconn/server-sdk/base.ts';
+import { optionalAuth, type AuthRequest } from '../src/middleware/auth.ts';
+import { DEFAULT_ORGANIZATION_ID } from '../src/db/users.ts';
+import { isLocalDevDemoAllowed } from './envAuthPolicy.ts';
 
 export interface DemoOperator {
   userId: string;
@@ -48,9 +51,7 @@ export const DEMO_OPERATORS: DemoOperator[] = [
   },
 ];
 
-function isProductionEnv(): boolean {
-  return process.env.NODE_ENV === 'production';
-}
+  // Legacy alias kept concise; host/environment gating uses isLocalDevDemoAllowed(req).
 
 function cleanEnvValue(value?: string): string {
   const trimmed = (value || '').trim();
@@ -166,12 +167,12 @@ export const nexconnRouter = express.Router();
  * Safe diagnostic check inside the running Express server process.
  * Never returns or logs secret values.
  */
-nexconnRouter.get('/health', (_req, res) => {
+nexconnRouter.get('/health', (req, res) => {
   const status = getEnvStatus();
   res.json({
     configured: status.isConfigured,
     environment: process.env.NODE_ENV || 'development',
-    demoAuthAllowed: !isProductionEnv(),
+    demoAuthAllowed: isLocalDevDemoAllowed(req),
     areaCodeIsSG: status.areaCode === 'SG',
     variables: status.vars,
     diagnostics: status.diagnostics,
@@ -179,12 +180,12 @@ nexconnRouter.get('/health', (_req, res) => {
 });
 
 /**
- * Returns the predefined demo operator directory (development only).
+ * Returns the predefined demo operator directory (strictly local development only).
  */
-nexconnRouter.get('/directory', (_req, res) => {
-  if (isProductionEnv()) {
+nexconnRouter.get('/directory', (req, res) => {
+  if (!isLocalDevDemoAllowed(req)) {
     return res.status(403).json({
-      error: 'Demo operator directory is disabled in production. Configure authenticated user sessions before deploying.',
+      error: 'Demo operator directory is disabled outside local development. Sign in with an authenticated operator session.',
     });
   }
 
@@ -193,25 +194,61 @@ nexconnRouter.get('/directory', (_req, res) => {
   });
 });
 
+function computeInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'GG';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
 /**
- * Issues a Nexconn user access token for a server-validated demo operator
- * using @nexconn/server-sdk Configuration + UserManagementApi.issueAccessToken().
- * Strictly disabled in production environments.
+ * Issues a Nexconn user access token using @nexconn/server-sdk Configuration + UserManagementApi.issueAccessToken().
+ * - When a verified Firebase Bearer token is present, scopes the Nexconn identity to organization_id + user_id.
+ * - In development without a Bearer token, preserves the server-validated DEMO_OPERATORS allowlist.
  */
-nexconnRouter.post('/token', async (req, res) => {
-  if (isProductionEnv()) {
-    return res.status(403).json({
-      error: 'Demo token issuance is disabled in production. Authenticated user sessions are required.',
-    });
-  }
+nexconnRouter.post('/token', optionalAuth, async (req: AuthRequest, res) => {
+  const authCtx = req.authContext;
+  const organizationId = authCtx?.organizationId || DEFAULT_ORGANIZATION_ID;
 
-  const operatorId = typeof req.body?.operatorId === 'string' ? req.body.operatorId.trim() : '';
-  const operator = DEMO_OPERATORS.find((op) => op.userId === operatorId);
+  let resolvedUserId = '';
+  let resolvedName = '';
+  let resolvedRole = '';
+  let resolvedStation = 'GuardianGrid Command';
+  let resolvedInitials = 'GG';
+  let resolvedAvatarUrl: string | undefined;
 
-  if (!operator) {
-    return res.status(403).json({
-      error: 'Invalid operatorId. Only predefined server-validated demo identities are permitted.',
-    });
+  if (authCtx?.isAuthenticated) {
+    if (authCtx.role === 'PUBLIC_SOS') {
+      return res.status(403).json({
+        error: 'Public SOS guest sessions are not authorized for operational Nexconn channels.',
+      });
+    }
+    resolvedUserId = authCtx.nexconnUserId;
+    resolvedName = authCtx.displayName;
+    resolvedRole = authCtx.role;
+    resolvedInitials = computeInitials(authCtx.displayName);
+  } else {
+    if (!isLocalDevDemoAllowed(req)) {
+      return res.status(401).json({
+        error: 'Authenticated operator session is required to issue a Nexconn access token.',
+      });
+    }
+
+    const operatorId = typeof req.body?.operatorId === 'string' ? req.body.operatorId.trim() : '';
+    const operator = DEMO_OPERATORS.find((op) => op.userId === operatorId);
+
+    if (!operator) {
+      return res.status(403).json({
+        error: 'Invalid operatorId. Only predefined server-validated demo identities are permitted.',
+      });
+    }
+
+    resolvedUserId = operator.userId;
+    resolvedName = operator.name;
+    resolvedRole = operator.role;
+    resolvedStation = operator.station;
+    resolvedInitials = operator.initials;
+    resolvedAvatarUrl = operator.avatarUrl;
   }
 
   const env = getEnvStatus();
@@ -231,9 +268,9 @@ nexconnRouter.post('/token', async (req, res) => {
 
     const userManagementApi = new UserManagementApi(configuration);
     const { data } = await userManagementApi.issueAccessToken({
-      userId: operator.userId,
-      name: operator.name,
-      ...(operator.avatarUrl ? { avatarUrl: operator.avatarUrl } : {}),
+      userId: resolvedUserId,
+      name: resolvedName,
+      ...(resolvedAvatarUrl ? { avatarUrl: resolvedAvatarUrl } : {}),
     });
 
     const issuedToken = data?.result?.accessToken;
@@ -244,11 +281,12 @@ nexconnRouter.post('/token', async (req, res) => {
     }
 
     return res.json({
-      userId: data?.result?.userId || operator.userId,
-      name: operator.name,
-      role: operator.role,
-      station: operator.station,
-      initials: operator.initials,
+      userId: data?.result?.userId || resolvedUserId,
+      organizationId,
+      name: resolvedName,
+      role: resolvedRole,
+      station: resolvedStation,
+      initials: resolvedInitials,
       token: issuedToken,
       appKey: env.appKey,
       areaCode: env.areaCode || 'SG',
@@ -275,6 +313,58 @@ nexconnRouter.post('/token', async (req, res) => {
     console.error('Nexconn token issuance failed:', error?.message || 'Unknown error');
     return res.status(500).json({
       error: error?.message || 'Unable to issue Nexconn access token.',
+    });
+  }
+});
+
+/**
+ * POST /api/nexconn/logout
+ * Expires active Nexconn access token via UserManagementApi.expireAccessToken on operator sign-out.
+ */
+nexconnRouter.post('/logout', optionalAuth, async (req: AuthRequest, res) => {
+  const authCtx = req.authContext;
+  let targetUserId = '';
+
+  if (authCtx?.isAuthenticated && authCtx.nexconnUserId) {
+    targetUserId = authCtx.nexconnUserId;
+  } else if (isLocalDevDemoAllowed(req)) {
+    const requestedId =
+      typeof req.body?.operatorId === 'string' ? req.body.operatorId.trim() : '';
+    const match = DEMO_OPERATORS.find((op) => op.userId === requestedId);
+    if (match) {
+      targetUserId = match.userId;
+    }
+  }
+
+  if (!targetUserId) {
+    return res.json({ ok: true, revoked: false, reason: 'no_active_operator_session' });
+  }
+
+  const env = getEnvStatus();
+  if (!env.isConfigured) {
+    return res.json({ ok: true, revoked: false, userId: targetUserId, reason: 'nexconn_unconfigured' });
+  }
+
+  try {
+    const configuration = new Configuration();
+    configuration.setNexconnCredentials(env.appKey, env.appSecret);
+    configuration.setPrimaryBackupDomains(env.primaryDomain, env.secondaryDomain);
+    configuration.setAutoFailoverEnabled(true);
+    configuration.setNonceGenerator(() => String(randomInt(100000000, 999999999)));
+
+    const userManagementApi = new UserManagementApi(configuration);
+    await userManagementApi.expireAccessToken({
+      userIds: [targetUserId],
+      expiresAt: Date.now(),
+    });
+    return res.json({ ok: true, revoked: true, userId: targetUserId });
+  } catch (err: any) {
+    console.warn('Nexconn token expiration warning during logout:', err?.message || 'Unknown error');
+    return res.json({
+      ok: true,
+      revoked: false,
+      userId: targetUserId,
+      warning: 'Token expiration call failed; client session disconnected.',
     });
   }
 });

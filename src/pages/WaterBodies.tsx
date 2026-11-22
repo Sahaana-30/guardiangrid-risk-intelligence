@@ -1,11 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { WaterBodyType, RiskTier } from '../types';
 import { TierBadge } from '../components/TierBadge';
 import { RiskGauge } from '../components/RiskGauge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
 import { SatelliteThumbnail } from '../components/SatelliteThumbnail';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   Search,
   Filter,
@@ -27,6 +28,8 @@ import {
 
 export const WaterBodies: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   const { currentCity, sites, siteRisks, isLoading, refreshData } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -113,9 +116,12 @@ export const WaterBodies: React.FC = () => {
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
-            Water Bodies Directory
-          </h1>
+          <div className="flex items-center gap-2.5">
+            {isStandalone && <BackNavButton fallbackPath="/analytics" />}
+            <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
+              Water Bodies Directory
+            </h1>
+          </div>
           <p className="text-sm text-[#5B687A] mt-1">
             Real-time monitoring across coastal beaches, recreational lakes, rivers, and storage reservoirs in {currentCity.name}, {currentCity.region}.
           </p>

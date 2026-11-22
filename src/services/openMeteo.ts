@@ -106,10 +106,16 @@ export function extractCurrentFactors(
 ): EnvironmentalFactors {
   const now = new Date();
   const times = weather.hourly.time;
-  
-  let currentIndex = -1;
-  const currentIsoPrefix = now.toISOString().slice(0, 13);
 
+  // Open-Meteo returns hourly.time in local site time when timezone=auto; align using utc_offset_seconds
+  const utcOffsetSec =
+    typeof (weather as any).utc_offset_seconds === 'number'
+      ? (weather as any).utc_offset_seconds
+      : -now.getTimezoneOffset() * 60;
+  const localNow = new Date(now.getTime() + utcOffsetSec * 1000);
+  const currentIsoPrefix = localNow.toISOString().slice(0, 13);
+
+  let currentIndex = -1;
   for (let i = 0; i < times.length; i++) {
     if (times[i].startsWith(currentIsoPrefix)) {
       currentIndex = i;

@@ -11,6 +11,9 @@ import type {
   ResponderProfile,
 } from '../types/emergency';
 
+import { getActiveOrganizationId } from './tenantScope';
+import { apiUrl, getApiCredentials } from './apiBase';
+
 const OFFLINE_SOS_QUEUE_KEY = 'gg_offline_sos_queue_v1';
 
 async function parseJson<T>(res: Response, endpoint: string): Promise<T> {
@@ -27,28 +30,47 @@ async function parseJson<T>(res: Response, endpoint: string): Promise<T> {
   return data as T;
 }
 
-const OP_HEADERS: Record<string, string> = {
-  'Content-Type': 'application/json',
-  Accept: 'application/json',
-  'x-gg-role': 'dispatcher',
-};
+type TokenProvider = () => Promise<string | null>;
+let authTokenProvider: TokenProvider | null = null;
+
+export function setAuthTokenProvider(provider: TokenProvider | null): void {
+  authTokenProvider = provider;
+}
+
+export async function buildOperationalHeaders(includeJsonBody = false): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'x-gg-role': 'dispatcher',
+    'x-gg-org-id': getActiveOrganizationId(),
+  };
+  if (includeJsonBody) {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (authTokenProvider) {
+    const token = await authTokenProvider();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return headers;
+}
 
 export async function fetchRescueCells(): Promise<{
   cells: RescueCell[];
   emergencyNumber: '112';
   storage: EmergencyStorageMeta;
 }> {
-  const res = await fetch('/api/emergency/cells', {
-    credentials: 'same-origin',
+  const res = await fetch(apiUrl('/api/emergency/cells'), {
+    credentials: getApiCredentials(),
     headers: { Accept: 'application/json' },
   });
   return parseJson(res, '/api/emergency/cells');
 }
 
 export async function submitPublicSOS(payload: PublicSOSPayload): Promise<PublicSOSReceipt> {
-  const res = await fetch('/api/emergency/sos', {
+  const res = await fetch(apiUrl('/api/emergency/sos'), {
     method: 'POST',
-    credentials: 'same-origin',
+    credentials: getApiCredentials(),
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
@@ -78,6 +100,14 @@ export function enqueueOfflineSOS(payload: PublicSOSPayload): PublicSOSPayload[]
     // Ignore storage quota errors
   }
   return next;
+}
+
+export function clearOfflineSOSQueue(): void {
+  try {
+    localStorage.removeItem(OFFLINE_SOS_QUEUE_KEY);
+  } catch {
+    // Ignore
+  }
 }
 
 export async function flushOfflineSOSQueue(): Promise<{
@@ -119,9 +149,9 @@ export async function fetchOperationalIncidents(
   responders: ResponderProfile[];
   storage: EmergencyStorageMeta;
 }> {
-  const res = await fetch(`/api/emergency/incidents?scope=${scope}`, {
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json', 'x-gg-role': 'dispatcher' },
+  const res = await fetch(apiUrl(`/api/emergency/incidents?scope=${scope}`), {
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(false),
   });
   return parseJson(res, '/api/emergency/incidents');
 }
@@ -134,10 +164,10 @@ export async function verifyIncidentApi(params: {
   notes?: string;
   createNexconnGroup?: boolean;
 }): Promise<{ incident: EmergencyIncident }> {
-  const res = await fetch(`/api/emergency/incidents/${params.incidentId}/verify`, {
+  const res = await fetch(apiUrl(`/api/emergency/incidents/${params.incidentId}/verify`), {
     method: 'POST',
-    credentials: 'same-origin',
-    headers: OP_HEADERS,
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(true),
     body: JSON.stringify(params),
   });
   return parseJson(res, `/api/emergency/incidents/${params.incidentId}/verify`);
@@ -146,9 +176,9 @@ export async function verifyIncidentApi(params: {
 export async function fetchRankedResponders(
   incidentId: string
 ): Promise<{ ranked: RankedResponder[] }> {
-  const res = await fetch(`/api/emergency/incidents/${incidentId}/rank-responders`, {
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json', 'x-gg-role': 'dispatcher' },
+  const res = await fetch(apiUrl(`/api/emergency/incidents/${incidentId}/rank-responders`), {
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(false),
   });
   return parseJson(res, `/api/emergency/incidents/${incidentId}/rank-responders`);
 }
@@ -165,10 +195,10 @@ export async function assignRespondersApi(params: {
   groupInviteSynced: boolean;
   responders: ResponderProfile[];
 }> {
-  const res = await fetch(`/api/emergency/incidents/${params.incidentId}/assign`, {
+  const res = await fetch(apiUrl(`/api/emergency/incidents/${params.incidentId}/assign`), {
     method: 'POST',
-    credentials: 'same-origin',
-    headers: OP_HEADERS,
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(true),
     body: JSON.stringify(params),
   });
   return parseJson(res, `/api/emergency/incidents/${params.incidentId}/assign`);
@@ -176,17 +206,28 @@ export async function assignRespondersApi(params: {
 
 export async function updateIncidentStatusApi(params: {
   incidentId: string;
-  nextState: IncidentState;
+  nextState?: IncidentState;
   actorId: string;
   actorName: string;
   actorRole: 'dispatcher' | 'responder';
   note?: string;
   acknowledgeOnly?: boolean;
-}): Promise<{ incident: EmergencyIncident; responders: ResponderProfile[] }> {
-  const res = await fetch(`/api/emergency/incidents/${params.incidentId}/status`, {
+  requestBackup?: boolean;
+  rejectAssignment?: boolean;
+  clientRequestId?: string;
+  responderLat?: number | null;
+  responderLon?: number | null;
+  arrivalVerification?: EmergencyIncident['arrivalVerification'];
+}): Promise<{
+  incident: EmergencyIncident;
+  responders: ResponderProfile[];
+  deduplicated?: boolean;
+  organizationId?: string;
+}> {
+  const res = await fetch(apiUrl(`/api/emergency/incidents/${params.incidentId}/status`), {
     method: 'POST',
-    credentials: 'same-origin',
-    headers: OP_HEADERS,
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(true),
     body: JSON.stringify(params),
   });
   return parseJson(res, `/api/emergency/incidents/${params.incidentId}/status`);
@@ -197,13 +238,26 @@ export async function createIncidentNexconnGroupApi(params: {
   ownerUserId: string;
   actorName: string;
 }): Promise<{ incident: EmergencyIncident; live: boolean; error: string | null }> {
-  const res = await fetch(`/api/emergency/incidents/${params.incidentId}/nexconn-group`, {
+  const res = await fetch(apiUrl(`/api/emergency/incidents/${params.incidentId}/nexconn-group`), {
     method: 'POST',
-    credentials: 'same-origin',
-    headers: OP_HEADERS,
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(true),
     body: JSON.stringify(params),
   });
   return parseJson(res, `/api/emergency/incidents/${params.incidentId}/nexconn-group`);
+}
+
+export async function joinIncidentNexconnGroupApi(
+  incidentId: string,
+  memberUserId?: string
+): Promise<{ ok: boolean; groupId: string; memberUserId: string; synced: boolean }> {
+  const res = await fetch(apiUrl(`/api/emergency/incidents/${incidentId}/nexconn-group/join`), {
+    method: 'POST',
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(true),
+    body: JSON.stringify(memberUserId ? { memberUserId } : {}),
+  });
+  return parseJson(res, `/api/emergency/incidents/${incidentId}/nexconn-group/join`);
 }
 
 export async function triggerSimulatedSOSApi(params: {
@@ -211,20 +265,20 @@ export async function triggerSimulatedSOSApi(params: {
   cellId: string;
   language: EmergencyLanguage;
 }): Promise<{ incident: EmergencyIncident }> {
-  const res = await fetch('/api/emergency/simulate/sos', {
+  const res = await fetch(apiUrl('/api/emergency/simulate/sos'), {
     method: 'POST',
-    credentials: 'same-origin',
-    headers: OP_HEADERS,
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(true),
     body: JSON.stringify(params),
   });
   return parseJson(res, '/api/emergency/simulate/sos');
 }
 
 export async function clearSimulatedIncidentsApi(): Promise<{ removedCount: number }> {
-  const res = await fetch('/api/emergency/simulate/clear', {
+  const res = await fetch(apiUrl('/api/emergency/simulate/clear'), {
     method: 'DELETE',
-    credentials: 'same-origin',
-    headers: OP_HEADERS,
+    credentials: getApiCredentials(),
+    headers: await buildOperationalHeaders(false),
   });
   return parseJson(res, '/api/emergency/simulate/clear');
 }

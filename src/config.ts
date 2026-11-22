@@ -29,6 +29,15 @@ export const CITIES: CityConfig[] = [
     bbox: [15.00, 73.65, 15.80, 74.15],
   },
   {
+    id: 'kerala',
+    name: 'Kerala Coast',
+    region: 'Kerala',
+    country: 'India',
+    lat: 8.4004,
+    lon: 76.9787,
+    bbox: [8.25, 76.80, 8.85, 77.15],
+  },
+  {
     id: 'sydney',
     name: 'Sydney',
     region: 'NSW',

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, RefreshCw, MessageSquare } from 'lucide-react';
+import { BackNavButton } from '../components/BackNavButton';
 import { useNexconn } from '../context/NexconnContext';
 import { ConversationList } from '../components/comms/ConversationList';
 import { ChatThread } from '../components/comms/ChatThread';
@@ -14,6 +15,21 @@ export const Messages: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <BackNavButton fallbackPath="/dashboard" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-[#0F766E] shrink-0" />
+            <h1 className="font-serif-heading text-2xl font-bold text-[#0B3B3C] leading-tight">
+              Communications
+            </h1>
+          </div>
+          <p className="text-xs text-[#5B687A]">
+            Nexconn operator direct messaging, group channels &amp; dispatch war-room threads.
+          </p>
+        </div>
+      </div>
+
       {connectionStatus === 'error' && connectionError && (
         <div className="bg-[#FBF8F3] border border-[#D65A4A]/40 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start gap-2.5 text-xs text-[#1B2A38]">
@@ -36,7 +52,7 @@ export const Messages: React.FC = () => {
         </div>
       )}
 
-      <div className="bg-[#FBF8F3] border border-[#E9E1D3] rounded-2xl shadow-xs overflow-hidden h-[calc(100vh-9.5rem)] min-h-[540px] flex">
+      <div className="bg-[#FBF8F3] border border-[#E9E1D3] rounded-2xl shadow-xs overflow-hidden h-[calc(100vh-13rem)] min-h-[500px] flex">
         {/* Left pane: Conversations & Operator Directory */}
         <div
           className={`${

@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { TierBadge } from '../components/TierBadge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   Calendar,
   Clock,
@@ -28,6 +30,8 @@ import {
 } from 'recharts';
 
 export const Forecast: React.FC = () => {
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   const { currentCity, sites, siteRisks, siteForecasts } = useApp();
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>(sites[0]?.id || '');
@@ -118,9 +122,12 @@ export const Forecast: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
-            7-Day Environmental Risk Forecast
-          </h1>
+          <div className="flex items-center gap-2.5">
+            {isStandalone && <BackNavButton fallbackPath="/analytics" />}
+            <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
+              7-Day Environmental Risk Forecast
+            </h1>
+          </div>
           <p className="text-sm text-[#5B687A] mt-1">
             Predictive hourly modeling driven by Open-Meteo multi-variable atmospheric and marine hindcast/forecast integrations.
           </p>

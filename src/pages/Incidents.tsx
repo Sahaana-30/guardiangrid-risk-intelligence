@@ -1,8 +1,13 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { useEmergency } from '../context/EmergencyContext';
+import { useWorkspace } from '../context/WorkspaceContext';
 import { Incident } from '../types';
 import { TierBadge } from '../components/TierBadge';
-import { ProvenanceTip } from '../components/ProvenanceTip';
+import { ProvenanceTip, DataTrustBadge, formatReadingAge } from '../components/ProvenanceTip';
+import { EmergencyResponseTimeline } from '../components/emergency/EmergencyResponseTimeline';
+import { BackNavButton } from '../components/BackNavButton';
 import { exportIncidentsCsv, importIncidentsCsv } from '../services/incidents';
 import {
   AlertCircle,
@@ -21,15 +26,69 @@ import {
   X,
   FileSpreadsheet,
   Globe,
+  Users,
+  Stethoscope,
+  MessageSquare,
+  MapPin,
 } from 'lucide-react';
 
 export const Incidents: React.FC = () => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { currentCity, sites, incidents, reportIncident, toggleVerifyIncident } = useApp();
+  const { incidents: operationalIncidents } = useEmergency();
+  const { activeWorkspace } = useWorkspace();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<string>('all');
+
+  // Operational SOS filter state synced with URL drill-down params
+  const [opsCategory, setOpsCategory] = useState<string>(() => searchParams.get('category') || 'all');
+  const [opsSeverity, setOpsSeverity] = useState<string>(() => searchParams.get('severity') || 'all');
+  const [opsCellId, setOpsCellId] = useState<string>(() => searchParams.get('cellId') || 'all');
+  const [opsState, setOpsState] = useState<string>(() => searchParams.get('state') || 'all');
+  const [selectedOpsIncidentId, setSelectedOpsIncidentId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOpsCategory(searchParams.get('category') || 'all');
+    setOpsSeverity(searchParams.get('severity') || 'all');
+    setOpsCellId(searchParams.get('cellId') || 'all');
+    setOpsState(searchParams.get('state') || 'all');
+  }, [searchParams]);
+
+  const filteredOperationalIncidents = useMemo(() => {
+    return operationalIncidents.filter((inc) => {
+      if (opsCategory !== 'all') {
+        if (opsCategory === 'drowning') {
+          if (inc.category !== 'drowning' && inc.category !== 'swept_away') return false;
+        } else if (inc.category !== opsCategory) {
+          return false;
+        }
+      }
+      if (opsSeverity !== 'all' && inc.severity !== opsSeverity) return false;
+      if (opsCellId !== 'all' && inc.cellId !== opsCellId) return false;
+      if (opsState !== 'all' && inc.state !== opsState) return false;
+      return true;
+    });
+  }, [operationalIncidents, opsCategory, opsSeverity, opsCellId, opsState]);
+
+  const selectedOpsIncident = useMemo(
+    () =>
+      filteredOperationalIncidents.find((inc) => inc.id === selectedOpsIncidentId) ||
+      operationalIncidents.find((inc) => inc.id === selectedOpsIncidentId) ||
+      null,
+    [filteredOperationalIncidents, operationalIncidents, selectedOpsIncidentId]
+  );
+
+  const clearOpsFilters = () => {
+    setOpsCategory('all');
+    setOpsSeverity('all');
+    setOpsCellId('all');
+    setOpsState('all');
+    setSearchParams({}, { replace: true });
+  };
 
   const [modalOpen, setModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -125,7 +184,8 @@ export const Incidents: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <BackNavButton fallbackPath="/dashboard" />
             <AlertCircle className="w-5 h-5 text-[#B5654A]" />
             <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
               Incident Intelligence & Safety Log
@@ -163,12 +223,252 @@ export const Incidents: React.FC = () => {
 
           <button
             onClick={() => setModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl bg-[#0F766E] text-white hover:bg-[#0B5A54] transition shadow-xs"
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl bg-[#0F766E] text-white hover:bg-[#0B5A54] transition shadow-xs cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Report Incident</span>
           </button>
+
+          <button
+            onClick={() => navigate('/sos')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-[#D65A4A] text-white hover:bg-[#B94334] transition shadow-xs cursor-pointer"
+          >
+            <ShieldAlert className="w-3.5 h-3.5" />
+            <span>Public SOS</span>
+          </button>
         </div>
+      </div>
+
+      {/* Live Operational SOS Incidents (Workspace-Scoped) */}
+      <div className="bg-[#FBF8F3] border border-[#E9E1D3] rounded-2xl p-5 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-serif-heading text-lg font-bold text-[#0B3B3C]">
+                Operational SOS Queue ({activeWorkspace.name})
+              </h2>
+              <DataTrustBadge
+                classification="live_measured"
+                compact
+                source={`Emergency Repository (${activeWorkspace.name})`}
+              />
+            </div>
+            <p className="text-xs text-[#5B687A] mt-0.5">
+              Live emergency SOS reports scoped to the active workspace. Simulated drills are visibly labelled.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {(['all', 'drowning', 'swept_away', 'missing_person', 'medical'] as const).map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setOpsCategory(cat)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium capitalize cursor-pointer transition-colors ${
+                  opsCategory === cat
+                    ? 'bg-[#0F766E] text-white font-semibold'
+                    : 'bg-white border border-[#E9E1D3] text-[#5B687A] hover:text-[#1B2A38]'
+                }`}
+              >
+                {cat === 'all' ? 'All SOS' : cat.replace('_', ' ')}
+              </button>
+            ))}
+            {(opsCategory !== 'all' || opsSeverity !== 'all' || opsCellId !== 'all' || opsState !== 'all') && (
+              <button
+                type="button"
+                onClick={clearOpsFilters}
+                className="text-[11px] font-semibold text-[#D65A4A] hover:underline cursor-pointer"
+              >
+                Clear filters{opsState !== 'all' ? ` (${opsState})` : ''}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {filteredOperationalIncidents.length === 0 ? (
+          <div className="py-5 text-center text-xs text-[#5B687A] bg-white/60 rounded-xl border border-[#E9E1D3]/60">
+            No operational SOS incidents match the current filter ({opsCategory !== 'all' ? opsCategory : 'all categories'}
+            {opsState !== 'all' ? `, state ${opsState}` : ''}
+            {opsCellId !== 'all' ? `, cell ${opsCellId}` : ''}).
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E9E1D3] text-[10px] uppercase tracking-wider text-[#5B687A]">
+                    <th className="py-2 pr-3">Code</th>
+                    <th className="py-2 pr-3">Type</th>
+                    <th className="py-2 pr-3">Location / Cell</th>
+                    <th className="py-2 pr-3">State</th>
+                    <th className="py-2 pr-3">Classification</th>
+                    <th className="py-2 pr-3">Reported</th>
+                    <th className="py-2 text-right">Context / Command</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E9E1D3]/60">
+                  {filteredOperationalIncidents.slice(0, 12).map((inc) => {
+                    const isSelected = selectedOpsIncident?.id === inc.id;
+                    return (
+                      <tr
+                        key={inc.id}
+                        onClick={() =>
+                          setSelectedOpsIncidentId(isSelected ? null : inc.id)
+                        }
+                        className={`cursor-pointer transition-colors ${
+                          isSelected ? 'bg-[#0F766E]/10' : 'hover:bg-[#F6F1E7]'
+                        }`}
+                      >
+                        <td className="py-2.5 pr-3 font-mono font-bold text-[#0B3B3C]">{inc.code}</td>
+                        <td className="py-2.5 pr-3 capitalize">{inc.category.replace('_', ' ')}</td>
+                        <td className="py-2.5 pr-3">
+                          <span className="font-medium text-[#1B2A38]">{inc.siteName}</span>
+                          <span className="text-[#5B687A]"> · {inc.cellId}</span>
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <span className="px-2 py-0.5 rounded-full bg-white border border-[#E9E1D3] text-[10px] font-semibold">
+                            {inc.state.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <DataTrustBadge
+                            classification={inc.isSimulated ? 'simulated_demo' : 'live_measured'}
+                            compact
+                            source={inc.isSimulated ? 'Simulated Drill' : 'Live SOS Record'}
+                          />
+                        </td>
+                        <td className="py-2.5 pr-3 text-[#5B687A]">
+                          {formatReadingAge(inc.createdAt).ageLabel}
+                        </td>
+                        <td className="py-2.5 text-right space-x-2 whitespace-nowrap">
+                          <span className="text-[11px] font-semibold text-[#5B687A]">
+                            {isSelected ? 'Hide details' : 'Details'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/command?incidentId=${inc.id}`);
+                            }}
+                            className="font-semibold text-[#0F766E] hover:underline cursor-pointer"
+                          >
+                            Console →
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Inline Contextual Incident Drawer: Incident <-> Lifeguard <-> Medical Handoff <-> Timeline */}
+            {selectedOpsIncident && (
+              <div className="rounded-xl border border-[#0F766E]/30 bg-white p-4 space-y-3 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#E9E1D3]">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-xs font-bold text-[#0B3B3C]">
+                      {selectedOpsIncident.code}
+                    </span>
+                    <span className="text-xs font-semibold text-[#1B2A38]">
+                      {selectedOpsIncident.siteName} · {selectedOpsIncident.cellId}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#F6F1E7] border border-[#E9E1D3] text-[10px] font-semibold">
+                      {selectedOpsIncident.state.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(
+                          `/map?incidentId=${selectedOpsIncident.id}&layer=incident&returnTo=${encodeURIComponent(
+                            '/incidents'
+                          )}`
+                        )
+                      }
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FBF8F3] border border-[#E9E1D3] text-[#1B2A38] text-[11px] font-semibold hover:border-[#0F766E]/40 cursor-pointer"
+                    >
+                      <MapPin className="w-3 h-3 text-[#0F766E]" />
+                      <span>View on Risk Map</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/command?incidentId=${selectedOpsIncident.id}`)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0F766E] text-white text-[11px] font-semibold hover:bg-[#0B5A54] cursor-pointer"
+                    >
+                      <ShieldAlert className="w-3 h-3" />
+                      <span>Live Console</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/responders?incidentId=${selectedOpsIncident.id}`)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FBF8F3] border border-[#E9E1D3] text-[#1B2A38] text-[11px] font-semibold hover:border-[#0F766E]/40 cursor-pointer"
+                    >
+                      <Users className="w-3 h-3 text-[#0F766E]" />
+                      <span>Assigned Lifeguards</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/medical-handoff?incidentId=${selectedOpsIncident.id}`)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FBF8F3] border border-[#E9E1D3] text-[#1B2A38] text-[11px] font-semibold hover:border-[#0F766E]/40 cursor-pointer"
+                    >
+                      <Stethoscope className="w-3 h-3 text-[#0F766E]" />
+                      <span>Medical Handoff</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/messages')}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FBF8F3] border border-[#E9E1D3] text-[#1B2A38] text-[11px] font-semibold hover:border-[#0F766E]/40 cursor-pointer"
+                    >
+                      <MessageSquare className="w-3 h-3 text-[#0F766E]" />
+                      <span>War Room Comms</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOpsIncidentId(null)}
+                      aria-label="Close incident context"
+                      className="p-1 rounded-lg text-[#5B687A] hover:text-[#1B2A38] cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="space-y-2">
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-[#5B687A]">
+                      Assigned Responders &amp; Summary
+                    </div>
+                    <p className="text-[#1B2A38] leading-relaxed">
+                      {selectedOpsIncident.description || 'Emergency SOS alert logged.'}
+                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {selectedOpsIncident.assignedResponderNames.length > 0 ? (
+                        selectedOpsIncident.assignedResponderNames.map((name) => (
+                          <span
+                            key={name}
+                            className="px-2 py-0.5 rounded-full bg-[#0F766E]/10 text-[#0B3B3C] text-[11px] font-semibold"
+                          >
+                            {name}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[11px] text-[#5B687A]">
+                          No responder assigned yet (awaiting dispatcher verification).
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <EmergencyResponseTimeline incident={selectedOpsIncident} compact />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* KPI Cards */}

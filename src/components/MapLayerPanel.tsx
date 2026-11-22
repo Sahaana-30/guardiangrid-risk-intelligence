@@ -1,5 +1,6 @@
 import React from 'react';
-import { Layers, Filter } from 'lucide-react';
+import { Layers, Filter, X } from 'lucide-react';
+import type { GoogleMapViewType } from '../types/maps';
 
 interface MapLayerPanelProps {
   layers: {
@@ -8,6 +9,7 @@ interface MapLayerPanelProps {
     cluster: boolean;
     incident: boolean;
     environmental: boolean;
+    rescueCells: boolean;
   };
   onToggleLayer: (layer: keyof MapLayerPanelProps['layers']) => void;
   filterType: string;
@@ -16,6 +18,10 @@ interface MapLayerPanelProps {
   setFilterRisk: (val: string) => void;
   timeRange: string;
   setTimeRange: (val: string) => void;
+  useGoogleMaps?: boolean;
+  mapType?: GoogleMapViewType;
+  setMapType?: (val: GoogleMapViewType) => void;
+  onClose?: () => void;
 }
 
 export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
@@ -27,23 +33,62 @@ export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
   setFilterRisk,
   timeRange,
   setTimeRange,
+  useGoogleMaps = false,
+  mapType = 'hybrid',
+  setMapType,
+  onClose,
 }) => {
   return (
-    <div className="w-64 sm:w-72 min-w-[240px] bg-[#FBF8F3] rounded-2xl border border-[#E9E1D3] shadow-xl p-4 text-[#1B2A38] space-y-4 select-none">
+    <div className="w-64 sm:w-72 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-8rem)] overflow-y-auto bg-[#FBF8F3]/95 backdrop-blur-md rounded-2xl border border-[#E9E1D3] shadow-xl p-4 text-[#1B2A38] space-y-4 select-none">
       <div className="flex items-center justify-between pb-2 border-b border-[#E9E1D3]">
         <span className="text-xs uppercase tracking-wider font-semibold text-[#5B687A] flex items-center gap-1.5">
           <Layers className="w-3.5 h-3.5 text-[#0F766E]" />
           Map Layers
         </span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close layers panel"
+            className="p-1 rounded-lg text-[#5B687A] hover:text-[#1B2A38] cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
+
+      {useGoogleMaps && setMapType && (
+        <div className="space-y-1.5">
+          <span className="text-[10px] uppercase tracking-wider font-semibold text-[#5B687A] block">
+            Google Map View
+          </span>
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#E9E1D3]/50 text-[11px] font-semibold">
+            {(['hybrid', 'roadmap', 'satellite'] as GoogleMapViewType[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setMapType(mode)}
+                className={`py-1 rounded-lg capitalize cursor-pointer transition-colors ${
+                  mapType === mode
+                    ? 'bg-[#0F766E] text-white shadow-xs'
+                    : 'text-[#5B687A] hover:text-[#1B2A38]'
+                }`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2.5">
         {[
-          { key: 'risk', label: 'Risk Layer' },
+          { key: 'risk', label: 'Risk Markers' },
+          { key: 'incident', label: 'Active SOS & Incidents' },
+          { key: 'environmental', label: 'Environmental Zones' },
+          { key: 'rescueCells', label: 'Beach Rescue Cells' },
           { key: 'forecast', label: 'Forecast Layer' },
-          { key: 'cluster', label: 'Cluster Layer' },
-          { key: 'incident', label: 'Incident Layer' },
-          { key: 'environmental', label: 'Environmental Layer' },
+          { key: 'cluster', label: 'Cluster Grouping' },
         ].map((item) => {
           const active = layers[item.key as keyof typeof layers];
           return (
@@ -54,7 +99,7 @@ export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
                 role="switch"
                 aria-checked={active}
                 onClick={() => onToggleLayer(item.key as keyof typeof layers)}
-                className={`w-9 h-5 rounded-full transition-colors relative focus:outline-none ${
+                className={`w-9 h-5 rounded-full transition-colors relative cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#0F766E]/40 ${
                   active ? 'bg-[#0F766E]' : 'bg-[#E9E1D3]'
                 }`}
               >
@@ -71,19 +116,23 @@ export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
 
       <div className="pt-2 border-t border-[#E9E1D3]">
         <span className="text-[10px] uppercase tracking-wider font-semibold text-[#5B687A] block mb-2">
-          Risk Level Legend
+          Risk Level Legend (4 Tiers)
         </span>
         <div className="space-y-1.5 text-xs">
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#D65A4A]" />
-            <span className="text-[#1B2A38]">High Risk (≥ 70)</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#991B1B] shrink-0" />
+            <span className="text-[#1B2A38]">Critical / Severe (≥ 85)</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#E9A03B]" />
-            <span className="text-[#1B2A38]">Medium Risk (35–69)</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#D65A4A] shrink-0" />
+            <span className="text-[#1B2A38]">High Risk (70–84)</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#2F855A]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#E9A03B] shrink-0" />
+            <span className="text-[#1B2A38]">Moderate Risk (35–69)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#2F855A] shrink-0" />
             <span className="text-[#1B2A38]">Low Risk (&lt; 35)</span>
           </div>
         </div>
@@ -96,6 +145,7 @@ export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
         </span>
 
         <select
+          aria-label="Filter water body type"
           value={filterType}
           onChange={(e) => setFilterType(e.target.value)}
           className="w-full text-xs bg-white border border-[#E9E1D3] rounded-xl px-2.5 py-1.5 text-[#1B2A38] focus:outline-none focus:border-[#0F766E]"
@@ -108,17 +158,20 @@ export const MapLayerPanel: React.FC<MapLayerPanelProps> = ({
         </select>
 
         <select
+          aria-label="Filter risk category"
           value={filterRisk}
           onChange={(e) => setFilterRisk(e.target.value)}
           className="w-full text-xs bg-white border border-[#E9E1D3] rounded-xl px-2.5 py-1.5 text-[#1B2A38] focus:outline-none focus:border-[#0F766E]"
         >
           <option value="all">All Risk Levels</option>
-          <option value="high">High Risk Only</option>
-          <option value="medium">Medium Risk Only</option>
-          <option value="low">Low Risk Only</option>
+          <option value="CRITICAL">Critical / Severe Only</option>
+          <option value="HIGH">High Risk Only</option>
+          <option value="MODERATE">Moderate Risk Only</option>
+          <option value="LOW">Low Risk Only</option>
         </select>
 
         <select
+          aria-label="Filter incident time window"
           value={timeRange}
           onChange={(e) => setTimeRange(e.target.value)}
           className="w-full text-xs bg-white border border-[#E9E1D3] rounded-xl px-2.5 py-1.5 text-[#1B2A38] focus:outline-none focus:border-[#0F766E]"

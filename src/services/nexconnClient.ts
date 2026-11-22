@@ -41,8 +41,18 @@ import type {
   OperatorProfile,
 } from '../types/comms';
 import { makeChannelKey } from '../types/comms';
+import {
+  AI_SBAR_HANDOFF_CARD_TYPE,
+  SOS_TELEMETRY_CARD_TYPE,
+  validateAiSbarHandoffPayload,
+  validateSosTelemetryPayload,
+  type AiSbarHandoffCardPayload,
+  type SosTelemetryCardPayload,
+} from '../components/comms/NexconnEmergencyCards';
+import { ensureNexconnChatUIReady } from './nexconnChatUI';
 
 const HANDLER_ID = 'guardiangrid-comms-main';
+const HANDOFF_MARKER_RE = /^\[GG_MEDICAL_HANDOFF:([^:\]]+):([^\]]+)\]/;
 
 let callPluginInstalled = false;
 let chatInitializedKey: string | null = null;
@@ -90,6 +100,171 @@ export function toChannelInstance(channelType: CommsChannelType, channelId: stri
     : new DirectChannel(channelId);
 }
 
+function parseCardObject(raw: unknown): unknown {
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return raw;
+}
+
+function parseServerSosAlertCardText(rawText: string): SosTelemetryCardPayload | null {
+  const lines = rawText.split('\n').map((l) => l.trim());
+  const header = lines[0]?.match(/\[CRITICAL SOS ALERT CARD\s*·\s*([^\]]+)\]\s*(\S+)/i);
+  if (!header) return null;
+
+  const status = header[1].trim();
+  const incidentCode = header[2].trim();
+  let category = 'drowning';
+  let cellLabel = 'Coastal Sector';
+  let siteName = 'Coastal Site';
+  let lat: number | null = null;
+  let lon: number | null = null;
+  let reportedAt = new Date().toISOString();
+  const assignedResponders: string[] = [];
+
+  for (const line of lines.slice(1)) {
+    if (line.startsWith('Type:')) {
+      category = line.slice(5).split('/')[0].trim().toLowerCase() || 'drowning';
+    } else if (line.startsWith('Beach / Rescue Cell:')) {
+      const rest = line.slice('Beach / Rescue Cell:'.length).split('·')[0].trim();
+      const [sitePart, cellPart] = rest.split('—').map((s) => s.trim());
+      if (sitePart) siteName = sitePart;
+      cellLabel = cellPart || sitePart || cellLabel;
+    } else if (line.startsWith('GPS:')) {
+      const gpsMatch = line.match(/(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
+      if (gpsMatch) {
+        lat = Number.parseFloat(gpsMatch[1]);
+        lon = Number.parseFloat(gpsMatch[2]);
+      }
+    } else if (line.startsWith('Time (UTC):')) {
+      reportedAt = line.slice('Time (UTC):'.length).trim() || reportedAt;
+    } else if (line.startsWith('Nearest Eligible Lifeguards Notified:')) {
+      const val = line.slice('Nearest Eligible Lifeguards Notified:'.length).trim();
+      if (val) {
+        assignedResponders.push(
+          ...val
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .slice(0, 5)
+        );
+      }
+    }
+  }
+
+  return {
+    incidentId: '',
+    incidentCode,
+    priority: category === 'drowning' || category === 'swept_away' ? 'P1 CRITICAL' : 'P1 URGENT',
+    category,
+    status,
+    cellId: incidentCode,
+    cellLabel,
+    siteName,
+    lat: Number.isFinite(lat as number) ? lat : null,
+    lon: Number.isFinite(lon as number) ? lon : null,
+    assignedResponders,
+    reportedAt,
+  };
+}
+
+export function normalizeEmergencyMessage(params: {
+  messageType: string;
+  content: Record<string, any>;
+}): {
+  kind: CommsMessage['kind'];
+  text: string;
+  sosCard?: SosTelemetryCardPayload;
+  sbarCard?: AiSbarHandoffCardPayload;
+  handoffMarker?: { reportId: string; incidentId: string };
+} {
+  const { messageType, content } = params;
+
+  if (messageType === SOS_TELEMETRY_CARD_TYPE) {
+    const parsed = validateSosTelemetryPayload(
+      parseCardObject(content.content ?? content) ?? content
+    );
+    if (parsed) {
+      return {
+        kind: 'sos_card',
+        text: `[SOS Telemetry] ${parsed.incidentCode} · ${parsed.priority} · ${parsed.cellLabel}`,
+        sosCard: parsed,
+      };
+    }
+    return {
+      kind: 'system',
+      text: 'SOS Telemetry Alert Card',
+    };
+  }
+
+  if (messageType === AI_SBAR_HANDOFF_CARD_TYPE) {
+    const parsed = validateAiSbarHandoffPayload(
+      parseCardObject(content.content ?? content) ?? content
+    );
+    if (parsed) {
+      return {
+        kind: 'sbar_card',
+        text: `[AI SBAR v${parsed.version}] ${parsed.incidentCode} · ${parsed.approvalStatus}`,
+        sbarCard: parsed,
+      };
+    }
+    return {
+      kind: 'system',
+      text: 'AI Medical SBAR Handoff Card',
+    };
+  }
+
+  const rawText =
+    typeof content.text === 'string'
+      ? content.text
+      : typeof content.content === 'string'
+        ? content.content
+        : '';
+
+  if (rawText) {
+    const handoffMatch = rawText.match(HANDOFF_MARKER_RE);
+    if (handoffMatch) {
+      return {
+        kind: 'text',
+        text: rawText,
+        handoffMarker: { reportId: handoffMatch[1], incidentId: handoffMatch[2] },
+      };
+    }
+    if (rawText.includes('[CRITICAL SOS ALERT CARD')) {
+      const serverSosCard = parseServerSosAlertCardText(rawText);
+      if (serverSosCard) {
+        return {
+          kind: 'sos_card',
+          text: rawText,
+          sosCard: serverSosCard,
+        };
+      }
+    }
+    return { kind: 'text', text: rawText };
+  }
+
+  if (messageType.startsWith('GG:')) {
+    const summaryParts = [content.incidentCode, content.title, content.status]
+      .filter((v) => typeof v === 'string' && v.trim().length > 0);
+    return {
+      kind: 'system',
+      text:
+        summaryParts.length > 0
+          ? `Emergency Coordination Card · ${summaryParts.join(' · ')}`
+          : 'Emergency Coordination Card',
+    };
+  }
+
+  return {
+    kind: 'text',
+    text: messageType === MessageType.TEXT ? '' : `Structured message (${messageType || 'event'})`,
+  };
+}
+
 export function serializeNexconnMessage(
   msg: Message<any>,
   currentUserId: string
@@ -117,12 +292,22 @@ export function serializeNexconnMessage(
   let fileName: string | undefined;
   let fileSize: number | undefined;
   let fileType: string | undefined;
+  let audioUrl: string | undefined;
+  let audioDuration: number | undefined;
+  let sosCard: SosTelemetryCardPayload | undefined;
+  let sbarCard: AiSbarHandoffCardPayload | undefined;
+  let handoffMarker: { reportId: string; incidentId: string } | undefined;
 
   if (msg.messageType === MessageType.IMAGE) {
     kind = 'image';
     imageUrl = content.remoteUrl || content.imageUri || undefined;
     thumbnailBase64 = content.thumbnailBase64 || content.content || undefined;
     text = '[Image attachment]';
+  } else if (msg.messageType === MessageType.HD_VOICE) {
+    kind = 'voice';
+    audioUrl = content.remoteUrl || content.audioUri || undefined;
+    audioDuration = typeof content.duration === 'number' ? content.duration : undefined;
+    text = audioDuration ? `Voice note (${audioDuration}s)` : 'Voice note';
   } else if (msg.messageType === MessageType.FILE) {
     kind = 'file';
     fileUrl = content.remoteUrl || content.fileUrl || undefined;
@@ -131,13 +316,15 @@ export function serializeNexconnMessage(
     fileType = content.fileType || content.type || undefined;
     text = fileName || '[File attachment]';
   } else {
-    kind = 'text';
-    text =
-      typeof content.text === 'string'
-        ? content.text
-        : typeof content.content === 'string'
-          ? content.content
-          : `[${msg.messageType}]`;
+    const normalized = normalizeEmergencyMessage({
+      messageType: msg.messageType,
+      content,
+    });
+    kind = normalized.kind;
+    text = normalized.text;
+    sosCard = normalized.sosCard;
+    sbarCard = normalized.sbarCard;
+    handoffMarker = normalized.handoffMarker;
   }
 
   return {
@@ -161,6 +348,11 @@ export function serializeNexconnMessage(
     fileName,
     fileSize,
     fileType,
+    audioUrl,
+    audioDuration,
+    sosCard,
+    sbarCard,
+    handoffMarker,
     rawMessage: msg,
   };
 }
@@ -169,10 +361,13 @@ export function previewFromMessage(msg: Message<any> | null): string {
   if (!msg) return 'No messages yet';
   const c = (msg.content || {}) as Record<string, any>;
   if (msg.messageType === MessageType.IMAGE) return 'Image shared';
+  if (msg.messageType === MessageType.HD_VOICE) return 'Voice note';
   if (msg.messageType === MessageType.FILE) return `File: ${c.name || 'Attachment'}`;
-  if (typeof c.text === 'string' && c.text.trim()) return c.text;
-  if (typeof c.content === 'string' && c.content.trim()) return c.content;
-  return 'New message';
+  const normalized = normalizeEmergencyMessage({
+    messageType: msg.messageType,
+    content: c,
+  });
+  return normalized.text.trim() || 'New message';
 }
 
 export interface NexconnSessionCallbacks {
@@ -223,6 +418,12 @@ export async function connectNexconnSession(params: {
       logLevel: LogLevel.WARN,
     });
     chatInitializedKey = initSignature;
+  }
+
+  // Initialize official Nexconn ChatUI BEFORE NCEngine.connect() so its internal
+  // connection-status and channel-sync handlers capture CONNECTED and offline sync events.
+  if (typeof window !== 'undefined' && typeof customElements !== 'undefined') {
+    ensureNexconnChatUIReady();
   }
 
   // Re-register clean handlers for current session
@@ -382,12 +583,25 @@ export async function connectNexconnSession(params: {
 }
 
 export async function disconnectNexconnSession(): Promise<void> {
+  if (!chatInitializedKey) return;
   try {
     NCEngine.removeConnectionStatusHandler(HANDLER_ID);
     NCEngine.removeChannelHandler(HANDLER_ID);
     NCEngine.removeMessageHandler(HANDLER_ID);
     NCEngine.removeUserHandler(HANDLER_ID);
     NCEngine.removeGroupChannelHandler(HANDLER_ID);
+    if (callEngineInstance) {
+      try {
+        callEngineInstance.setCallEventHandler({
+          onCallReceived() {},
+          onCallEnded() {},
+          onCallConnected() {},
+        });
+      } catch {
+        // Ignore call handler teardown errors
+      }
+      callEngineInstance = null;
+    }
     await NCEngine.disconnect();
   } catch {
     // Ignore disconnect errors during cleanup
@@ -542,6 +756,36 @@ export async function sendFileViaNexconn(
   if (!sendRes.isOk || !sendRes.data) {
     throw new Error(
       `Failed to upload file (code ${sendRes.code}): ${sendRes.msg || 'Ensure media storage is enabled in Nexconn Console'}`
+    );
+  }
+  return serializeNexconnMessage(sendRes.data, currentUserId);
+}
+
+export async function sendVoiceViaNexconn(
+  channelType: CommsChannelType,
+  channelId: string,
+  file: File,
+  currentUserId: string,
+  onProgress?: (percent: number) => void
+): Promise<CommsMessage> {
+  const channel = toChannelInstance(channelType, channelId);
+  const paramsRes = await Helper.createSendHDVoiceMessageParams(file);
+  if (!paramsRes.isOk || !paramsRes.data) {
+    throw new Error(
+      `Unable to prepare voice note (${paramsRes.code}): ${paramsRes.msg || 'Unsupported audio format'}`
+    );
+  }
+
+  const params = paramsRes.data;
+  params.needReceipt = true;
+  if (onProgress) {
+    params.onUploadProgress = (progress) => onProgress(progress);
+  }
+
+  const sendRes = await channel.sendMediaMessage(params);
+  if (!sendRes.isOk || !sendRes.data) {
+    throw new Error(
+      `Failed to upload voice note (code ${sendRes.code}): ${sendRes.msg || 'Ensure media storage is enabled in Nexconn Console'}`
     );
   }
   return serializeNexconnMessage(sendRes.data, currentUserId);

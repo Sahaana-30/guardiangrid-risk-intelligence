@@ -149,13 +149,13 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           </div>
         </div>
 
-        {/* Active Demo Operator Selector */}
+        {/* Active Operator Station Selector */}
         {directory.length > 0 && (
           <div className="bg-[#F6F1E7] border border-[#E9E1D3] rounded-xl p-2.5">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[#5B687A] flex items-center gap-1">
                 <UserCheck className="w-3 h-3 text-[#0F766E]" />
-                Demo Identity (Dev)
+                Operator Station (Dev)
               </span>
               {switching && <span className="text-[10px] text-[#0F766E]">Switching...</span>}
             </div>
@@ -163,7 +163,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               value={activeOperator?.userId || ''}
               disabled={switching}
               onChange={(e) => void handleOperatorSwitch(e.target.value)}
-              aria-label="Select active demo operator"
+              aria-label="Select active operator station"
               className="w-full text-xs font-medium text-[#1B2A38] bg-white border border-[#E9E1D3] rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-[#0F766E]"
             >
               {directory.map((op) => (

@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useLocation, useParams, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { TierBadge } from '../components/TierBadge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
+import { BackNavButton } from '../components/BackNavButton';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import {
@@ -25,6 +26,8 @@ import {
 export const Reports: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   const { currentCity, sites, siteRisks, siteForecasts, lastUpdated } = useApp();
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>(id || 'all');
@@ -225,7 +228,8 @@ Scoring driven by GuardianGrid's expert-weighted additive index on Open-Meteo an
       {/* Top Header & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
+            {isStandalone && <BackNavButton fallbackPath={id ? '/reports' : '/analytics'} />}
             <FileText className="w-5 h-5 text-[#0F766E]" />
             <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
               Intelligence Reports

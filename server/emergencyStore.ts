@@ -14,7 +14,7 @@ import type {
   RescueCell,
   ResponderProfile,
 } from '../src/types/emergency';
-import { CHENNAI_RESCUE_CELLS, INITIAL_SIMULATED_RESPONDERS } from './emergencyData';
+import { ALL_INDIA_RESCUE_CELLS, INITIAL_SIMULATED_RESPONDERS } from './emergencyData';
 
 interface PersistedEmergencyState {
   version: 1;
@@ -41,10 +41,11 @@ export const STORAGE_META: EmergencyStorageMeta = {
  */
 export const ALLOWED_TRANSITIONS: Record<IncidentState, IncidentState[]> = {
   UNVERIFIED: ['VERIFIED', 'REJECTED'],
-  VERIFIED: ['DISPATCHED', 'RESOLVED', 'REJECTED'],
-  DISPATCHED: ['EN_ROUTE', 'ON_SCENE', 'MEDICAL_HANDOFF', 'RESOLVED'],
-  EN_ROUTE: ['ON_SCENE', 'MEDICAL_HANDOFF', 'RESOLVED'],
-  ON_SCENE: ['MEDICAL_HANDOFF', 'RESOLVED'],
+  VERIFIED: ['DISPATCHED', 'EN_ROUTE', 'RESOLVED', 'REJECTED'],
+  DISPATCHED: ['EN_ROUTE', 'ON_SCENE', 'VICTIM_RECOVERED', 'MEDICAL_HANDOFF', 'RESOLVED'],
+  EN_ROUTE: ['ON_SCENE', 'VICTIM_RECOVERED', 'MEDICAL_HANDOFF', 'RESOLVED'],
+  ON_SCENE: ['VICTIM_RECOVERED', 'MEDICAL_HANDOFF', 'RESOLVED'],
+  VICTIM_RECOVERED: ['MEDICAL_HANDOFF', 'RESOLVED'],
   MEDICAL_HANDOFF: ['RESOLVED'],
   RESOLVED: [],
   REJECTED: [],
@@ -103,13 +104,13 @@ export function resolveRescueCell(
   lon?: number | null
 ): RescueCell {
   if (cellId) {
-    const exact = CHENNAI_RESCUE_CELLS.find((c) => c.id.toUpperCase() === cellId.toUpperCase());
+    const exact = ALL_INDIA_RESCUE_CELLS.find((c) => c.id.toUpperCase() === cellId.toUpperCase());
     if (exact) return exact;
   }
   if (typeof lat === 'number' && typeof lon === 'number' && Number.isFinite(lat) && Number.isFinite(lon)) {
-    let best = CHENNAI_RESCUE_CELLS[0];
+    let best = ALL_INDIA_RESCUE_CELLS[0];
     let bestDist = Infinity;
-    for (const cell of CHENNAI_RESCUE_CELLS) {
+    for (const cell of ALL_INDIA_RESCUE_CELLS) {
       const d = haversineMeters(lat, lon, cell.lat, cell.lon);
       if (d < bestDist) {
         bestDist = d;
@@ -118,7 +119,7 @@ export function resolveRescueCell(
     }
     return best;
   }
-  return CHENNAI_RESCUE_CELLS[0];
+  return ALL_INDIA_RESCUE_CELLS[0];
 }
 
 function maskPhone(raw?: string): string | undefined {
@@ -151,14 +152,27 @@ function createAuditEvent(params: Omit<AuditEvent, 'id' | 'timestamp'>): AuditEv
   };
 }
 
-export function evaluateEscalations(): void {
+const FALLBACK_DEFAULT_ORG_ID =
+  process.env.DEFAULT_ORGANIZATION_ID?.trim() || 'org-guardian-grid-india';
+
+function getIncidentOrgId(incident: EmergencyIncident): string {
+  return incident.organizationId || FALLBACK_DEFAULT_ORG_ID;
+}
+
+export function evaluateEscalations(organizationId?: string): EmergencyIncident[] {
   const now = Date.now();
+  const newlyEscalated: EmergencyIncident[] = [];
   let changed = false;
 
   for (const incident of state.incidents) {
+    if (organizationId && getIncidentOrgId(incident) !== organizationId) continue;
+
+    const isEligibleState =
+      (incident.state === 'DISPATCHED' && !incident.acknowledgedAt) ||
+      incident.state === 'UNVERIFIED';
+
     if (
-      incident.state === 'DISPATCHED' &&
-      !incident.acknowledgedAt &&
+      isEligibleState &&
       incident.escalation &&
       incident.escalation.active &&
       !incident.escalation.escalated
@@ -168,6 +182,7 @@ export function evaluateEscalations(): void {
         incident.escalation.escalated = true;
         incident.escalation.escalatedAt = new Date(now).toISOString();
         incident.updatedAt = incident.escalation.escalatedAt;
+        const isUnverifiedStage = incident.state === 'UNVERIFIED';
         incident.auditTrail.push(
           createAuditEvent({
             actorId: 'system-escalation',
@@ -176,11 +191,14 @@ export function evaluateEscalations(): void {
             action: 'ESCALATION_TRIGGERED',
             fromState: incident.state,
             toState: incident.state,
-            summary: incident.escalation.backupResponderName
-              ? `No acknowledgement within ${incident.escalation.timeoutSeconds}s. Backup responder ${incident.escalation.backupResponderName} flagged for dispatcher escalation.`
-              : `No acknowledgement within ${incident.escalation.timeoutSeconds}s. Backup escalation flagged for dispatcher review.`,
+            summary: isUnverifiedStage
+              ? `UNVERIFIED SOS unacknowledged after ${incident.escalation.timeoutSeconds}s. Escalated for urgent supervisor & backup official alerting.`
+              : incident.escalation.backupResponderName
+                ? `No responder acknowledgement within ${incident.escalation.timeoutSeconds}s. Backup responder ${incident.escalation.backupResponderName} flagged for dispatcher escalation.`
+                : `No responder acknowledgement within ${incident.escalation.timeoutSeconds}s. Backup escalation flagged for dispatcher review.`,
           })
         );
+        newlyEscalated.push(incident);
         changed = true;
       }
     }
@@ -189,19 +207,24 @@ export function evaluateEscalations(): void {
   if (changed) {
     persistState();
   }
+  return newlyEscalated;
 }
 
 export function listRescueCells(): RescueCell[] {
-  return CHENNAI_RESCUE_CELLS;
+  return ALL_INDIA_RESCUE_CELLS;
 }
 
 export function listResponders(): ResponderProfile[] {
   return state.responders;
 }
 
-export function listIncidents(scope: 'all' | 'real' | 'simulated' = 'all'): EmergencyIncident[] {
-  evaluateEscalations();
+export function listIncidents(
+  scope: 'all' | 'real' | 'simulated' = 'all',
+  organizationId: string = FALLBACK_DEFAULT_ORG_ID
+): EmergencyIncident[] {
+  evaluateEscalations(organizationId);
   const filtered = state.incidents.filter((inc) => {
+    if (getIncidentOrgId(inc) !== organizationId) return false;
     if (scope === 'real') return !inc.isSimulated;
     if (scope === 'simulated') return inc.isSimulated;
     return true;
@@ -209,28 +232,69 @@ export function listIncidents(scope: 'all' | 'real' | 'simulated' = 'all'): Emer
   return [...filtered].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
-export function getIncidentById(id: string): EmergencyIncident | undefined {
-  evaluateEscalations();
-  return state.incidents.find((inc) => inc.id === id);
+export function getIncidentById(
+  id: string,
+  organizationId: string = FALLBACK_DEFAULT_ORG_ID
+): EmergencyIncident | undefined {
+  evaluateEscalations(organizationId);
+  return state.incidents.find(
+    (inc) => inc.id === id && getIncidentOrgId(inc) === organizationId
+  );
 }
 
 export function createPublicSOS(
   payload: PublicSOSPayload,
-  options?: { isSimulated?: boolean; actorName?: string }
-): { incident: EmergencyIncident; cell: RescueCell; deduplicated: boolean } {
+  options?: {
+    isSimulated?: boolean;
+    actorName?: string;
+    organizationId?: string;
+    escalationTimeoutSeconds?: number;
+  }
+): { incident: EmergencyIncident; cell: RescueCell; deduplicated: boolean; qrCellValid: boolean } {
   const isSimulated = Boolean(options?.isSimulated);
+  const organizationId = options?.organizationId || FALLBACK_DEFAULT_ORG_ID;
 
-  // Idempotent retry handling for low-network offline queue
+  // Idempotent retry handling scoped strictly to organizationId
   if (payload.clientRequestId) {
-    const existing = state.incidents.find((inc) => inc.clientRequestId === payload.clientRequestId);
+    const existing = state.incidents.find(
+      (inc) =>
+        inc.clientRequestId === payload.clientRequestId &&
+        getIncidentOrgId(inc) === organizationId
+    );
     if (existing) {
       const matchedCell = resolveRescueCell(existing.cellId, existing.lat, existing.lon);
-      return { incident: existing, cell: matchedCell, deduplicated: true };
+      return {
+        incident: existing,
+        cell: matchedCell,
+        deduplicated: true,
+        qrCellValid: existing.qrCellValid ?? true,
+      };
     }
   }
 
+  const qrCellValid = payload.cellId
+    ? ALL_INDIA_RESCUE_CELLS.some((c) => c.id.toUpperCase() === payload.cellId!.toUpperCase())
+    : true;
   const cell = resolveRescueCell(payload.cellId, payload.lat, payload.lon);
-  const nowIso = new Date().toISOString();
+  const hasGps =
+    typeof payload.lat === 'number' &&
+    typeof payload.lon === 'number' &&
+    Number.isFinite(payload.lat) &&
+    Number.isFinite(payload.lon);
+  const accuracy =
+    typeof payload.gpsAccuracyMeters === 'number' && Number.isFinite(payload.gpsAccuracyMeters)
+      ? Math.round(payload.gpsAccuracyMeters)
+      : null;
+  const locationQuality: EmergencyIncident['locationQuality'] = hasGps
+    ? accuracy !== null && accuracy > 100
+      ? 'low_accuracy_gps'
+      : 'verified_gps'
+    : payload.cellId && qrCellValid
+      ? 'cell_qr_only'
+      : 'missing_gps';
+
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   state.sequence += 1;
   const codePrefix = isSimulated ? 'SIM-SOS' : 'GG-SOS';
   const code = `${codePrefix}-${state.sequence}`;
@@ -242,9 +306,17 @@ export function createPublicSOS(
       ? payload.photoDataUrl
       : undefined;
 
+  const escSec =
+    typeof options?.escalationTimeoutSeconds === 'number' && options.escalationTimeoutSeconds > 0
+      ? Math.max(15, Math.min(600, options.escalationTimeoutSeconds))
+      : null;
+
   const incident: EmergencyIncident = {
     id: `inc-${randomUUID().slice(0, 8)}`,
+    organizationId,
     code,
+    regionId: cell.regionId,
+    regionName: cell.regionName,
     clientRequestId: payload.clientRequestId || undefined,
     category: payload.category,
     severity: defaultSeverityForCategory(payload.category),
@@ -259,13 +331,12 @@ export function createPublicSOS(
     cellLabel: cell.label,
     siteId: cell.siteId,
     siteName: cell.siteName,
-    lat: typeof payload.lat === 'number' && Number.isFinite(payload.lat) ? payload.lat : cell.lat,
-    lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : cell.lon,
-    gpsAccuracyMeters:
-      typeof payload.gpsAccuracyMeters === 'number' && Number.isFinite(payload.gpsAccuracyMeters)
-        ? Math.round(payload.gpsAccuracyMeters)
-        : null,
+    lat: hasGps ? payload.lat! : cell.lat,
+    lon: hasGps ? payload.lon! : cell.lon,
+    gpsAccuracyMeters: accuracy,
     locationSource: payload.locationSource || (payload.cellId ? 'cell_qr' : 'manual'),
+    locationQuality,
+    qrCellValid,
     hasPhotoAttachment: Boolean(safePhoto),
     photoDataUrl: safePhoto,
     hasVoiceNote: Boolean(payload.hasVoiceNote || payload.voiceTranscript),
@@ -276,7 +347,17 @@ export function createPublicSOS(
     nexconnGroupName: null,
     nexconnGroupLive: false,
     nexconnGroupError: null,
-    escalation: null,
+    escalation: escSec
+      ? {
+          active: true,
+          stage: 'unverified_sos',
+          timeoutSeconds: escSec,
+          deadlineIso: new Date(nowMs + escSec * 1000).toISOString(),
+          backupResponderId: null,
+          backupResponderName: null,
+          escalated: false,
+        }
+      : null,
     createdAt: nowIso,
     updatedAt: nowIso,
     auditTrail: [
@@ -286,24 +367,25 @@ export function createPublicSOS(
         actorRole: isSimulated ? 'system' : 'public',
         action: 'SOS_REPORTED',
         toState: 'UNVERIFIED',
-        summary: `${isSimulated ? '[SIMULATED] ' : ''}SOS received (${payload.category.replace('_', ' ')}) at ${cell.id} (${cell.siteName}). Awaiting mandatory human dispatcher verification.`,
+        summary: `${isSimulated ? '[SIMULATED] ' : ''}SOS received (${payload.category.replace('_', ' ')}) at ${cell.id} (${cell.siteName}). Location quality: ${locationQuality}${!qrCellValid ? ' (unrecognized QR cellId fell back to nearest/default cell)' : ''}. Awaiting mandatory human dispatcher verification.`,
       }),
     ],
   };
 
   state.incidents.unshift(incident);
   persistState();
-  return { incident, cell, deduplicated: false };
+  return { incident, cell, deduplicated: false, qrCellValid };
 }
 
 export function verifyIncident(params: {
+  organizationId?: string;
   incidentId: string;
   decision: 'verify' | 'reject';
   dispatcherId: string;
   dispatcherName: string;
   notes?: string;
 }): EmergencyIncident {
-  const incident = getIncidentById(params.incidentId);
+  const incident = getIncidentById(params.incidentId, params.organizationId || FALLBACK_DEFAULT_ORG_ID);
   if (!incident) {
     throw new Error('Incident not found.');
   }
@@ -317,6 +399,9 @@ export function verifyIncident(params: {
   const nowIso = new Date().toISOString();
   incident.state = targetState;
   incident.updatedAt = nowIso;
+  if (incident.escalation && incident.escalation.stage === 'unverified_sos') {
+    incident.escalation.active = false;
+  }
   if (targetState === 'VERIFIED') {
     incident.verifiedAt = nowIso;
     incident.verifiedBy = params.dispatcherName;
@@ -345,6 +430,7 @@ export function verifyIncident(params: {
 }
 
 export function attachNexconnGroupToIncident(params: {
+  organizationId?: string;
   incidentId: string;
   groupId: string | null;
   groupName: string;
@@ -353,7 +439,7 @@ export function attachNexconnGroupToIncident(params: {
   actorId: string;
   actorName: string;
 }): EmergencyIncident {
-  const incident = getIncidentById(params.incidentId);
+  const incident = getIncidentById(params.incidentId, params.organizationId || FALLBACK_DEFAULT_ORG_ID);
   if (!incident) {
     throw new Error('Incident not found.');
   }
@@ -382,8 +468,11 @@ export function attachNexconnGroupToIncident(params: {
   return incident;
 }
 
-export function rankRespondersForIncident(incidentId: string): RankedResponder[] {
-  const incident = getIncidentById(incidentId);
+export function rankRespondersForIncident(
+  incidentId: string,
+  organizationId: string = FALLBACK_DEFAULT_ORG_ID
+): RankedResponder[] {
+  const incident = getIncidentById(incidentId, organizationId);
   if (!incident) {
     throw new Error('Incident not found.');
   }
@@ -403,8 +492,13 @@ export function rankRespondersForIncident(incidentId: string): RankedResponder[]
     const distanceMeters = haversineMeters(targetLat, targetLon, responder.lat, responder.lon);
     const estimatedEtaMinutes = Math.max(1, Math.round(distanceMeters / 160)); // ~9.6 km/h beach ATV/run speed
 
-    // 1. Distance score (max 40)
-    const distancePoints = Math.max(5, Math.round(40 * Math.max(0, 1 - distanceMeters / 8000)));
+    // 1. Distance + GPS freshness score (max 40)
+    const locAgeMs = responder.locationUpdatedAt
+      ? Date.now() - new Date(responder.locationUpdatedAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    const isStaleLocation = !Number.isFinite(locAgeMs) || locAgeMs > 15 * 60 * 1000;
+    const rawDistancePoints = Math.max(5, Math.round(40 * Math.max(0, 1 - distanceMeters / 8000)));
+    const distancePoints = isStaleLocation ? Math.max(5, rawDistancePoints - 6) : rawDistancePoints;
 
     // 2. Availability score (max 30)
     const availabilityPoints =
@@ -434,7 +528,7 @@ export function rankRespondersForIncident(incidentId: string): RankedResponder[]
         label: 'Proximity to Rescue Cell',
         points: distancePoints,
         maxPoints: 40,
-        detail: `${(distanceMeters / 1000).toFixed(2)} km (~${estimatedEtaMinutes} min ETA)`,
+        detail: `${(distanceMeters / 1000).toFixed(2)} km (~${estimatedEtaMinutes} min ETA)${isStaleLocation ? ' · Stale GPS (>15m)' : ' · Live GPS'}`,
       },
       {
         label: 'Shift Availability',
@@ -476,14 +570,22 @@ export function rankRespondersForIncident(incidentId: string): RankedResponder[]
 }
 
 export function assignRespondersToIncident(params: {
+  organizationId?: string;
   incidentId: string;
   responderIds: string[];
   backupResponderId?: string | null;
   escalationTimeoutSeconds?: number;
   dispatcherId: string;
   dispatcherName: string;
-}): { incident: EmergencyIncident; assignedProfiles: ResponderProfile[] } {
-  const incident = getIncidentById(params.incidentId);
+  allowOverride?: boolean;
+  overrideReason?: string;
+}): {
+  incident: EmergencyIncident;
+  assignedProfiles: ResponderProfile[];
+  noEligibleAvailableWarning: boolean;
+} {
+  const orgId = params.organizationId || FALLBACK_DEFAULT_ORG_ID;
+  const incident = getIncidentById(params.incidentId, orgId);
   if (!incident) {
     throw new Error('Incident not found.');
   }
@@ -501,6 +603,15 @@ export function assignRespondersToIncident(params: {
     throw new Error('Select at least one valid responder.');
   }
 
+  const offDutyChosen = chosen.filter((r) => r.availability === 'off_duty');
+  if (offDutyChosen.length > 0 && !params.allowOverride) {
+    throw new Error(
+      `Responder(s) ${offDutyChosen.map((r) => r.name).join(', ')} are off duty. Provide dispatcher override confirmation to assign.`
+    );
+  }
+
+  const noEligibleAvailableWarning = !state.responders.some((r) => r.availability === 'available');
+
   const prev = incident.state;
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -517,7 +628,9 @@ export function assignRespondersToIncident(params: {
 
   const backup = params.backupResponderId
     ? state.responders.find((r) => r.id === params.backupResponderId)
-    : rankRespondersForIncident(incident.id).find((item) => !incident.assignedResponderIds.includes(item.responder.id))?.responder;
+    : rankRespondersForIncident(incident.id, orgId).find(
+        (item) => !incident.assignedResponderIds.includes(item.responder.id)
+      )?.responder;
 
   if (incident.state === 'VERIFIED') {
     incident.state = 'DISPATCHED';
@@ -527,6 +640,7 @@ export function assignRespondersToIncident(params: {
 
   incident.escalation = {
     active: true,
+    stage: 'dispatched_ack',
     timeoutSeconds: timeoutSec,
     deadlineIso: new Date(now + timeoutSec * 1000).toISOString(),
     backupResponderId: backup?.id || null,
@@ -539,32 +653,152 @@ export function assignRespondersToIncident(params: {
       actorId: params.dispatcherId,
       actorName: params.dispatcherName,
       actorRole: 'dispatcher',
-      action: 'RESPONDER_DISPATCHED',
+      action: params.allowOverride ? 'RESPONDER_DISPATCHED_OVERRIDE' : 'RESPONDER_DISPATCHED',
       fromState: prev,
       toState: incident.state,
-      summary: `Dispatcher ${params.dispatcherName} approved & dispatched ${chosen.map((c) => c.name).join(', ')}. Backup escalation timer set (${timeoutSec}s${backup ? `, backup: ${backup.name}` : ''}).`,
+      summary: `Dispatcher ${params.dispatcherName} approved & dispatched ${chosen.map((c) => c.name).join(', ')} (awaiting responder acceptance). Backup escalation timer set (${timeoutSec}s${backup ? `, backup: ${backup.name}` : ''}).${params.overrideReason ? ` Override reason: ${params.overrideReason}` : ''}${noEligibleAvailableWarning ? ' [WARNING: No available on-duty responders in pool]' : ''}`,
     })
   );
 
   persistState();
-  return { incident, assignedProfiles: chosen };
+  return { incident, assignedProfiles: chosen, noEligibleAvailableWarning };
 }
 
 export function updateIncidentState(params: {
+  organizationId?: string;
   incidentId: string;
-  nextState: IncidentState;
+  nextState?: IncidentState;
   actorId: string;
   actorName: string;
   actorRole: 'dispatcher' | 'responder';
   note?: string;
   acknowledgeOnly?: boolean;
-}): EmergencyIncident {
-  const incident = getIncidentById(params.incidentId);
+  requestBackup?: boolean;
+  rejectAssignment?: boolean;
+  arrivalVerification?: 'gps_verified' | 'manual_confirmed';
+  clientRequestId?: string;
+  responderLat?: number | null;
+  responderLon?: number | null;
+}): { incident: EmergencyIncident; deduplicated: boolean } {
+  const orgId = params.organizationId || FALLBACK_DEFAULT_ORG_ID;
+  const incident = getIncidentById(params.incidentId, orgId);
   if (!incident) {
     throw new Error('Incident not found.');
   }
 
+  // Idempotency guard for offline retry queue
+  if (params.clientRequestId) {
+    const existingEvt = incident.auditTrail.find((e) => e.id === `req-${params.clientRequestId}`);
+    if (existingEvt) {
+      return { incident, deduplicated: true };
+    }
+  }
+
   const nowIso = new Date().toISOString();
+  const eventId = params.clientRequestId
+    ? `req-${params.clientRequestId}`
+    : `evt-${randomUUID().slice(0, 8)}`;
+
+  // Sync responder GPS coordinates if provided
+  if (
+    typeof params.responderLat === 'number' &&
+    typeof params.responderLon === 'number' &&
+    Number.isFinite(params.responderLat) &&
+    Number.isFinite(params.responderLon)
+  ) {
+    for (const r of state.responders) {
+      if (r.id === params.actorId || r.nexconnUserId === params.actorId) {
+        r.lat = params.responderLat;
+        r.lon = params.responderLon;
+        r.locationUpdatedAt = nowIso;
+      }
+    }
+  }
+
+  if (params.rejectAssignment) {
+    if (incident.state === 'RESOLVED' || incident.state === 'REJECTED') {
+      throw new Error(`Cannot reject assignment on a ${incident.state} incident.`);
+    }
+    const matchingResponder = state.responders.find(
+      (r) => r.id === params.actorId || r.nexconnUserId === params.actorId
+    );
+    const removeId = matchingResponder?.id || params.actorId;
+    const idx = incident.assignedResponderIds.indexOf(removeId);
+    if (idx >= 0) {
+      incident.assignedResponderIds.splice(idx, 1);
+      incident.assignedResponderNames.splice(idx, 1);
+    }
+    if (matchingResponder) {
+      matchingResponder.availability = 'available';
+      matchingResponder.activeIncidentId = null;
+    }
+    const backupCandidate = rankRespondersForIncident(incident.id, orgId).find(
+      (item) =>
+        item.responder.id !== removeId &&
+        !incident.assignedResponderIds.includes(item.responder.id) &&
+        item.responder.availability === 'available'
+    )?.responder;
+
+    incident.escalation = {
+      active: true,
+      stage: 'dispatched_ack',
+      timeoutSeconds: incident.escalation?.timeoutSeconds ?? 60,
+      deadlineIso: nowIso,
+      backupResponderId: backupCandidate?.id || null,
+      backupResponderName: backupCandidate?.name || null,
+      escalated: true,
+      escalatedAt: nowIso,
+    };
+    incident.updatedAt = nowIso;
+    incident.auditTrail.push({
+      id: eventId,
+      timestamp: nowIso,
+      actorId: params.actorId,
+      actorName: params.actorName,
+      actorRole: params.actorRole,
+      action: 'RESPONDER_REJECTED',
+      fromState: incident.state,
+      toState: incident.state,
+      summary: `${params.actorName} rejected dispatch assignment. Escalated immediately${backupCandidate ? ` — recommended backup: ${backupCandidate.name}` : ' — no available backup responder'}.${params.note ? ` Reason: ${params.note.trim()}` : ''}`,
+    });
+    persistState();
+    return { incident, deduplicated: false };
+  }
+
+  if (params.requestBackup) {
+    if (incident.state === 'RESOLVED' || incident.state === 'REJECTED') {
+      throw new Error(`Cannot request backup on a ${incident.state} incident.`);
+    }
+    const existingEsc = incident.escalation;
+    const backupCandidate = rankRespondersForIncident(incident.id, orgId).find(
+      (item) => !incident.assignedResponderIds.includes(item.responder.id)
+    )?.responder;
+
+    incident.escalation = {
+      active: true,
+      stage: 'dispatched_ack',
+      timeoutSeconds: existingEsc?.timeoutSeconds ?? 60,
+      deadlineIso: nowIso,
+      backupResponderId: existingEsc?.backupResponderId || backupCandidate?.id || null,
+      backupResponderName: existingEsc?.backupResponderName || backupCandidate?.name || null,
+      escalated: true,
+      escalatedAt: nowIso,
+    };
+    incident.updatedAt = nowIso;
+    incident.auditTrail.push({
+      id: eventId,
+      timestamp: nowIso,
+      actorId: params.actorId,
+      actorName: params.actorName,
+      actorRole: params.actorRole,
+      action: 'BACKUP_REQUESTED',
+      fromState: incident.state,
+      toState: incident.state,
+      summary: `${params.actorName} requested urgent backup from field.${params.note ? ` Note: ${params.note.trim()}` : ''}`,
+    });
+    persistState();
+    return { incident, deduplicated: false };
+  }
 
   if (params.acknowledgeOnly && incident.state === 'DISPATCHED') {
     incident.acknowledgedAt = incident.acknowledgedAt || nowIso;
@@ -572,23 +806,23 @@ export function updateIncidentState(params: {
       incident.escalation.active = false;
     }
     incident.updatedAt = nowIso;
-    incident.auditTrail.push(
-      createAuditEvent({
-        actorId: params.actorId,
-        actorName: params.actorName,
-        actorRole: params.actorRole,
-        action: 'RESPONDER_ACKNOWLEDGED',
-        fromState: incident.state,
-        toState: incident.state,
-        summary: `${params.actorName} acknowledged dispatch.${params.note ? ` ${params.note.trim()}` : ''}`,
-      })
-    );
+    incident.auditTrail.push({
+      id: eventId,
+      timestamp: nowIso,
+      actorId: params.actorId,
+      actorName: params.actorName,
+      actorRole: params.actorRole,
+      action: 'RESPONDER_ACKNOWLEDGED',
+      fromState: incident.state,
+      toState: incident.state,
+      summary: `${params.actorName} accepted/acknowledged dispatch.${params.note ? ` ${params.note.trim()}` : ''}`,
+    });
     persistState();
-    return incident;
+    return { incident, deduplicated: false };
   }
 
-  if (!ALLOWED_TRANSITIONS[incident.state].includes(params.nextState)) {
-    throw new Error(`Invalid transition from ${incident.state} to ${params.nextState}.`);
+  if (!params.nextState || !ALLOWED_TRANSITIONS[incident.state].includes(params.nextState)) {
+    throw new Error(`Invalid transition from ${incident.state} to ${params.nextState || 'unknown'}.`);
   }
 
   const prev = incident.state;
@@ -599,15 +833,39 @@ export function updateIncidentState(params: {
     incident.acknowledgedAt = incident.acknowledgedAt || nowIso;
     incident.enRouteAt = nowIso;
     if (incident.escalation) incident.escalation.active = false;
+    for (const r of state.responders) {
+      if (
+        incident.assignedResponderIds.includes(r.id) ||
+        r.id === params.actorId ||
+        r.nexconnUserId === params.actorId
+      ) {
+        r.availability = 'dispatched';
+        r.activeIncidentId = incident.id;
+      }
+    }
   } else if (params.nextState === 'ON_SCENE') {
     incident.acknowledgedAt = incident.acknowledgedAt || nowIso;
     incident.onSceneAt = nowIso;
+    incident.arrivalVerification =
+      params.arrivalVerification ||
+      (typeof params.responderLat === 'number' && typeof params.responderLon === 'number'
+        ? 'gps_verified'
+        : 'manual_confirmed');
     if (incident.escalation) incident.escalation.active = false;
     for (const r of state.responders) {
-      if (incident.assignedResponderIds.includes(r.id)) {
+      if (
+        incident.assignedResponderIds.includes(r.id) ||
+        r.id === params.actorId ||
+        r.nexconnUserId === params.actorId
+      ) {
         r.availability = 'on_scene';
+        r.activeIncidentId = incident.id;
       }
     }
+  } else if (params.nextState === 'VICTIM_RECOVERED') {
+    incident.acknowledgedAt = incident.acknowledgedAt || nowIso;
+    incident.victimRecoveredAt = nowIso;
+    if (incident.escalation) incident.escalation.active = false;
   } else if (params.nextState === 'RESOLVED') {
     incident.resolvedAt = nowIso;
     incident.closureSummary = params.note?.trim() || 'Incident resolved and closed.';
@@ -620,26 +878,37 @@ export function updateIncidentState(params: {
     }
   }
 
-  incident.auditTrail.push(
-    createAuditEvent({
-      actorId: params.actorId,
-      actorName: params.actorName,
-      actorRole: params.actorRole,
-      action: `STATE_${params.nextState}`,
-      fromState: prev,
-      toState: params.nextState,
-      summary: `${params.actorName} updated status to ${params.nextState.replace('_', ' ')}.${params.note ? ` Note: ${params.note.trim()}` : ''}`,
-    })
-  );
+  incident.auditTrail.push({
+    id: eventId,
+    timestamp: nowIso,
+    actorId: params.actorId,
+    actorName: params.actorName,
+    actorRole: params.actorRole,
+    action: `STATE_${params.nextState}`,
+    fromState: prev,
+    toState: params.nextState,
+    summary:
+      params.nextState === 'VICTIM_RECOVERED'
+        ? `${params.actorName} reported VICTIM RECOVERED. Awaiting dispatcher confirmation for final resolution.${params.note ? ` Note: ${params.note.trim()}` : ''}`
+        : params.nextState === 'ON_SCENE'
+          ? `${params.actorName} confirmed ON SCENE (${incident.arrivalVerification === 'gps_verified' ? 'GPS-verified arrival' : 'explicit manual confirmation'}).${params.note ? ` Note: ${params.note.trim()}` : ''}`
+          : `${params.actorName} updated status to ${params.nextState.replace('_', ' ')}.${params.note ? ` Note: ${params.note.trim()}` : ''}`,
+  });
 
   persistState();
-  return incident;
+  return { incident, deduplicated: false };
 }
 
-export function clearSimulatedIncidents(): { removedCount: number } {
+export function clearSimulatedIncidents(
+  organizationId: string = FALLBACK_DEFAULT_ORG_ID
+): { removedCount: number } {
   const before = state.incidents.length;
-  const removedIds = new Set(state.incidents.filter((i) => i.isSimulated).map((i) => i.id));
-  state.incidents = state.incidents.filter((i) => !i.isSimulated);
+  const removedIds = new Set(
+    state.incidents
+      .filter((i) => i.isSimulated && getIncidentOrgId(i) === organizationId)
+      .map((i) => i.id)
+  );
+  state.incidents = state.incidents.filter((i) => !removedIds.has(i.id));
 
   for (const r of state.responders) {
     if (r.activeIncidentId && removedIds.has(r.activeIncidentId)) {

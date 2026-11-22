@@ -1,4 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { auth } from '../lib/firebase';
+import { useAuth } from './AuthContext';
+import { getActiveOrganizationId } from '../services/tenantScope';
+import { apiUrl, getApiCredentials } from '../services/apiBase';
 import { NCCallEndReason, NCCallMediaType, NCCallType } from '@nexconn/call';
 import type { MessagesQuery } from '@nexconn/chat';
 import {
@@ -15,6 +19,7 @@ import {
   sendImageViaNexconn,
   sendTextViaNexconn,
   sendTypingIndicator,
+  sendVoiceViaNexconn,
   serializeNexconnMessage,
   setCallCamera,
   setCallMicrophone,
@@ -22,6 +27,7 @@ import {
   subscribeAndFetchOnlineStatus,
   unbindCallVideoElements,
 } from '../services/nexconnClient';
+import { syncChatUIProfileRegistry } from '../services/nexconnChatUI';
 import type {
   ActiveCallState,
   CallMediaKind,
@@ -36,6 +42,83 @@ import type {
 import { makeChannelKey } from '../types/comms';
 
 const STORAGE_OPERATOR_KEY = 'gg_nexconn_operator_id';
+
+const PUBLIC_ROUTE_PREFIXES = ['/sos', '/track'];
+const OPERATIONAL_ROUTE_PREFIXES = [
+  '/command',
+  '/messages',
+  '/field-kit',
+  '/responders',
+  '/incidents',
+  '/medical-handoff',
+  '/dashboard',
+  '/analytics',
+  '/map',
+  '/water-bodies',
+  '/forecast',
+  '/reports',
+  '/settings',
+  '/analyst',
+  '/explain',
+  '/clusters',
+  '/fairness',
+  '/methodology',
+  '/operations',
+  '/intelligence',
+  '/communications',
+  '/organization',
+  '/workspace',
+  '/admin',
+];
+
+export function extractCleanRoutePath(pathnameOrHash: string): string {
+  const raw = (pathnameOrHash || '/').replace(/^#/, '').split('?')[0].split('#')[0].trim();
+  if (!raw) return '/';
+  return raw.startsWith('/') ? raw : `/${raw}`;
+}
+
+export function isPublicSafetyRoute(pathnameOrHash: string): boolean {
+  const clean = extractCleanRoutePath(pathnameOrHash);
+  if (clean === '/') return true;
+  return PUBLIC_ROUTE_PREFIXES.some(
+    (prefix) => clean === prefix || clean.startsWith(`${prefix}/`)
+  );
+}
+
+export function isOperationalPathname(pathnameOrHash: string): boolean {
+  const clean = extractCleanRoutePath(pathnameOrHash);
+  if (isPublicSafetyRoute(clean)) return false;
+  return OPERATIONAL_ROUTE_PREFIXES.some(
+    (prefix) => clean === prefix || clean.startsWith(`${prefix}/`)
+  );
+}
+
+export function validateNexconnCallTarget(
+  calleeId: string,
+  activeOperatorUserId?: string | null
+): { ok: true; targetId: string } | { ok: false; error: string } {
+  const targetId = (calleeId || '').trim();
+  if (!targetId) {
+    return {
+      ok: false,
+      error: 'Select or assign a responder with a valid Nexconn User ID before starting a call.',
+    };
+  }
+  if (targetId.startsWith('resp-')) {
+    return {
+      ok: false,
+      error:
+        'Cannot place Nexconn call using internal responder profile ID; resolve responder.nexconnUserId first.',
+    };
+  }
+  if (activeOperatorUserId && targetId === activeOperatorUserId) {
+    return {
+      ok: false,
+      error: 'Cannot place a call to your own active operator session.',
+    };
+  }
+  return { ok: true, targetId };
+}
 
 async function parseJsonResponse<T = Record<string, any>>(
   res: Response,
@@ -97,8 +180,14 @@ interface NexconnContextValue {
   createGroup: (groupName: string, inviteeUserIds: string[]) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   sendText: (text: string) => Promise<void>;
+  sendTextToChannel: (
+    channelType: CommsChannelType,
+    channelId: string,
+    text: string
+  ) => Promise<void>;
   sendImage: (file: File) => Promise<void>;
   sendFile: (file: File) => Promise<void>;
+  sendVoice: (file: File) => Promise<void>;
   notifyTyping: () => void;
   startCall: (calleeId: string, mediaType: CallMediaKind) => Promise<void>;
   acceptIncomingCall: () => Promise<void>;
@@ -146,8 +235,22 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const directoryRef = useRef<OperatorProfile[]>([]);
   directoryRef.current = directory;
 
+  const { user: firebaseUser, loading: authLoading, getIdToken } = useAuth();
+  const firebaseUserRef = useRef(firebaseUser);
+  firebaseUserRef.current = firebaseUser;
+
   const activeOperatorRef = useRef<OperatorProfile | null>(null);
   activeOperatorRef.current = activeOperator;
+
+  const connectionStatusRef = useRef<CommsConnectionStatus>('disconnected');
+  connectionStatusRef.current = connectionStatus;
+
+  const connectEpochRef = useRef(0);
+  const bootInFlightRef = useRef<Promise<void> | null>(null);
+  const connectedScopeKeyRef = useRef<string | null>(null);
+  const signedOutLatchRef = useRef(false);
+  const prevFirebaseUidRef = useRef<string | null>(null);
+  const autoReconnectInFlightRef = useRef(false);
 
   const operatorsById = useMemo(() => {
     const map: Record<string, OperatorProfile> = {};
@@ -161,6 +264,36 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const getOperatorName = useCallback((userId: string) => {
     return operatorsByIdRef.current[userId]?.name || userId;
   }, []);
+
+  const clearTypingTimers = useCallback(() => {
+    for (const timerId of Object.values(typingTimersRef.current)) {
+      window.clearTimeout(timerId);
+    }
+    typingTimersRef.current = {};
+  }, []);
+
+  const teardownSessionState = useCallback(
+    async (nextError: string | null = null) => {
+      clearTypingTimers();
+      queryMapRef.current = {};
+      connectedScopeKeyRef.current = null;
+      activeOperatorRef.current = null;
+      setActiveOperator(null);
+      setChannels([]);
+      setSelectedChannelKey(null);
+      setMessagesByChannel({});
+      setHasMoreByChannel({});
+      setTypingByChannel({});
+      setOnlineMap({});
+      setIncomingCall(null);
+      setActiveCall(null);
+      setCallError(null);
+      setConnectionError(nextError);
+      setConnectionStatus('disconnected');
+      await disconnectNexconnSession();
+    },
+    [clearTypingTimers]
+  );
 
   const refreshChannels = useCallback(async () => {
     setIsLoadingChannels(true);
@@ -184,12 +317,17 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const connectAsOperator = useCallback(
     async (operator: OperatorProfile, allOperators: OperatorProfile[]) => {
+      const epoch = ++connectEpochRef.current;
+      let hasConnectedInEpoch = false;
+
+      clearTypingTimers();
       setConnectionError(null);
       setConnectionStatus('connecting');
       setActiveOperator(operator);
+      activeOperatorRef.current = operator;
       localStorage.setItem(STORAGE_OPERATOR_KEY, operator.userId);
 
-      // Clear previous session chat state cleanly
+      // Clear previous session chat state cleanly (singleton ChatUI resets user cache on NCEngine reconnect)
       queryMapRef.current = {};
       setChannels([]);
       setSelectedChannelKey(null);
@@ -200,24 +338,60 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setActiveCall(null);
 
       await disconnectNexconnSession();
+      if (epoch !== connectEpochRef.current) return;
 
       try {
-        const res = await fetch('/api/nexconn/token', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {
+        const buildTokenHeaders = async (forceRefresh = false): Promise<Record<string, string>> => {
+          const h: Record<string, string> = {
             'Content-Type': 'application/json',
             Accept: 'application/json',
-          },
+            'x-gg-org-id': getActiveOrganizationId(),
+          };
+          try {
+            const idToken = forceRefresh && auth.currentUser
+              ? await auth.currentUser.getIdToken(true)
+              : (await getIdToken()) ||
+                (auth.currentUser ? await auth.currentUser.getIdToken() : null);
+            if (idToken) {
+              h.Authorization = `Bearer ${idToken}`;
+            }
+          } catch {
+            // Non-fatal in development demo mode
+          }
+          return h;
+        };
+
+        let headers = await buildTokenHeaders(false);
+        let res = await fetch(apiUrl('/api/nexconn/token'), {
+          method: 'POST',
+          credentials: getApiCredentials(),
+          headers,
           body: JSON.stringify({ operatorId: operator.userId }),
         });
 
+        if (res.status === 401 && auth.currentUser) {
+          headers = await buildTokenHeaders(true);
+          res = await fetch(apiUrl('/api/nexconn/token'), {
+            method: 'POST',
+            credentials: getApiCredentials(),
+            headers,
+            body: JSON.stringify({ operatorId: operator.userId }),
+          });
+        }
+
         const payload = await parseJsonResponse<{
+          userId?: string;
+          name?: string;
+          role?: string;
+          station?: string;
+          initials?: string;
           token?: string;
           appKey?: string;
           areaCode?: string;
           error?: string;
         }>(res, '/api/nexconn/token');
+
+        if (epoch !== connectEpochRef.current) return;
 
         if (!payload?.token || !payload?.appKey) {
           throw new Error(
@@ -225,17 +399,59 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
           );
         }
 
+        const resolvedOperator: OperatorProfile = {
+          userId: payload.userId || operator.userId,
+          name: payload.name || operator.name,
+          role: payload.role || operator.role,
+          station: payload.station || operator.station,
+          initials: payload.initials || operator.initials,
+        };
+        setActiveOperator(resolvedOperator);
+        activeOperatorRef.current = resolvedOperator;
+
         const dirLookup: Record<string, OperatorProfile> = {};
         for (const item of allOperators) dirLookup[item.userId] = item;
+        dirLookup[resolvedOperator.userId] = resolvedOperator;
+
+        syncChatUIProfileRegistry({ operators: Object.values(dirLookup) });
 
         await connectNexconnSession({
           appKey: payload.appKey,
           areaCode: payload.areaCode || 'SG',
           token: payload.token,
-          currentUserId: operator.userId,
+          currentUserId: resolvedOperator.userId,
           callbacks: {
-            onConnectionStatusChanged(status) {
+            onConnectionStatusChanged(status, code) {
+              if (epoch !== connectEpochRef.current) return;
               setConnectionStatus(status);
+              if (status === 'connected') {
+                hasConnectedInEpoch = true;
+                autoReconnectInFlightRef.current = false;
+                setConnectionError(null);
+                return;
+              }
+              const isTokenExpiredCode = code === 31001 || code === 31002;
+              if ((hasConnectedInEpoch || isTokenExpiredCode) && !signedOutLatchRef.current) {
+                if (status === 'disconnected' || status === 'error') {
+                  setConnectionError(
+                    isTokenExpiredCode
+                      ? 'Nexconn session token expired. Reconnecting operator session...'
+                      : 'Nexconn real-time connection interrupted.'
+                  );
+                  if (!autoReconnectInFlightRef.current && isOperationalPathname(window.location.hash || window.location.pathname)) {
+                    autoReconnectInFlightRef.current = true;
+                    window.setTimeout(() => {
+                      if (epoch === connectEpochRef.current && !signedOutLatchRef.current) {
+                        void connectAsOperator(resolvedOperator, allOperators).finally(() => {
+                          autoReconnectInFlightRef.current = false;
+                        });
+                      } else {
+                        autoReconnectInFlightRef.current = false;
+                      }
+                    }, 1200);
+                  }
+                }
+              }
             },
             onChannelsSyncComplete() {
               void refreshChannels();
@@ -403,84 +619,261 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
           },
         });
 
+        if (epoch !== connectEpochRef.current) return;
+
         setConnectionStatus('connected');
         await refreshChannels();
 
+        if (epoch !== connectEpochRef.current) return;
+
         const otherIds = allOperators
           .map((o) => o.userId)
-          .filter((id) => id !== operator.userId);
+          .filter((id) => id !== resolvedOperator.userId);
         const statuses = await subscribeAndFetchOnlineStatus(otherIds);
-        setOnlineMap((prev) => ({ ...prev, ...statuses, [operator.userId]: true }));
+        if (epoch !== connectEpochRef.current) return;
+        setOnlineMap((prev) => ({ ...prev, ...statuses, [resolvedOperator.userId]: true }));
       } catch (err: any) {
+        if (epoch !== connectEpochRef.current) return;
         setConnectionStatus('error');
         setConnectionError(err?.message || 'Unable to connect to Nexconn messaging services.');
       }
     },
-    [refreshChannels]
+    [clearTypingTimers, getIdToken, refreshChannels]
   );
 
-  // Bootstrap environment health + directory on initial mount
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [healthRes, dirRes] = await Promise.all([
-          fetch('/api/nexconn/health', {
-            credentials: 'same-origin',
-            headers: { Accept: 'application/json' },
-          }),
-          fetch('/api/nexconn/directory', {
-            credentials: 'same-origin',
-            headers: { Accept: 'application/json' },
-          }),
-        ]);
-        const healthData = await parseJsonResponse<NexconnHealthStatus>(
-          healthRes,
-          '/api/nexconn/health'
-        );
-        if (!cancelled) setHealth(healthData);
+  const isOperationalRoute = useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    const hashPath = (window.location.hash || '').replace(/^#/, '');
+    const path = hashPath || window.location.pathname || '/';
+    return isOperationalPathname(path);
+  }, []);
 
-        const dirData = await parseJsonResponse<{ operators?: OperatorProfile[] }>(
-          dirRes,
-          '/api/nexconn/directory'
-        );
-        const ops: OperatorProfile[] = Array.isArray(dirData?.operators)
-          ? dirData.operators
-          : [];
-        if (cancelled || ops.length === 0) return;
+  const bootstrapAndConnect = useCallback(
+    async (force = false) => {
+      if (!force && signedOutLatchRef.current) return;
+      if (!force && !isOperationalRoute()) return;
 
-        setDirectory(ops);
-        const savedId = localStorage.getItem(STORAGE_OPERATOR_KEY);
-        const initialOp = ops.find((o) => o.userId === savedId) || ops[0];
-        await connectAsOperator(initialOp, ops);
-      } catch (err: any) {
-        if (!cancelled) {
+      const currentScopeKey = `${firebaseUserRef.current?.uid || 'anon'}:${getActiveOrganizationId()}`;
+      if (
+        !force &&
+        connectionStatusRef.current === 'connected' &&
+        connectedScopeKeyRef.current === currentScopeKey
+      ) {
+        return;
+      }
+
+      if (bootInFlightRef.current) {
+        if (!force) return bootInFlightRef.current;
+        await bootInFlightRef.current.catch(() => undefined);
+      }
+
+      const run = (async () => {
+        const startEpoch = connectEpochRef.current;
+        try {
+          const buildHeaders = async (forceRefresh = false): Promise<Record<string, string>> => {
+            const h: Record<string, string> = {
+              Accept: 'application/json',
+              'x-gg-org-id': getActiveOrganizationId(),
+            };
+            try {
+              const idToken = forceRefresh && auth.currentUser
+                ? await auth.currentUser.getIdToken(true)
+                : (await getIdToken()) ||
+                  (auth.currentUser ? await auth.currentUser.getIdToken() : null);
+              if (idToken) {
+                h.Authorization = `Bearer ${idToken}`;
+              }
+            } catch {
+              // Non-fatal in development demo mode
+            }
+            return h;
+          };
+
+          const healthRes = await fetch(apiUrl('/api/nexconn/health'), {
+            credentials: getApiCredentials(),
+            headers: { Accept: 'application/json' },
+          });
+          const healthData = await parseJsonResponse<NexconnHealthStatus>(
+            healthRes,
+            '/api/nexconn/health'
+          );
+          if (connectEpochRef.current !== startEpoch) return;
+          setHealth(healthData);
+
+          if (!healthData.configured) {
+            setConnectionStatus('error');
+            setConnectionError('Nexconn credentials are not configured on the backend.');
+            return;
+          }
+
+          let ops: OperatorProfile[] = [];
+          const fbUser = firebaseUserRef.current || auth.currentUser;
+
+          if (!healthData.demoAuthAllowed) {
+            if (!fbUser) {
+              await teardownSessionState(
+                'Sign in with an authorized operator account to connect Nexconn War Room.'
+              );
+              return;
+            }
+            ops = [
+              {
+                userId: fbUser.uid,
+                name: fbUser.displayName || fbUser.email || 'Authorized Operator',
+                role: 'Coastal Operations',
+                station: 'Command Workspace',
+                initials: (fbUser.displayName || fbUser.email || 'OP').slice(0, 2).toUpperCase(),
+              },
+            ];
+          } else {
+            let headers = await buildHeaders(false);
+            let dirRes = await fetch(apiUrl('/api/nexconn/directory'), {
+              credentials: getApiCredentials(),
+              headers,
+            });
+            if (dirRes.status === 401 && auth.currentUser) {
+              headers = await buildHeaders(true);
+              dirRes = await fetch(apiUrl('/api/nexconn/directory'), {
+                credentials: getApiCredentials(),
+                headers,
+              });
+            }
+            if (connectEpochRef.current !== startEpoch) return;
+
+            if (dirRes.ok) {
+              const dirData = await parseJsonResponse<{ operators?: OperatorProfile[] }>(
+                dirRes,
+                '/api/nexconn/directory'
+              );
+              ops = Array.isArray(dirData?.operators) ? dirData.operators : [];
+            } else if (dirRes.status === 403 || dirRes.status === 401) {
+              if (fbUser) {
+                ops = [
+                  {
+                    userId: fbUser.uid,
+                    name: fbUser.displayName || fbUser.email || 'Authorized Operator',
+                    role: 'Coastal Operations',
+                    station: 'Command Workspace',
+                    initials: (fbUser.displayName || fbUser.email || 'OP').slice(0, 2).toUpperCase(),
+                  },
+                ];
+              } else {
+                await teardownSessionState(
+                  'Sign in with an authorized operator account to connect Nexconn War Room.'
+                );
+                return;
+              }
+            } else {
+              throw new Error(`/api/nexconn/directory failed (HTTP ${dirRes.status}).`);
+            }
+          }
+
+          if (connectEpochRef.current !== startEpoch || ops.length === 0) return;
+
+          setDirectory(ops);
+          directoryRef.current = ops;
+          const savedId = localStorage.getItem(STORAGE_OPERATOR_KEY);
+          const initialOp = ops.find((o) => o.userId === savedId) || ops[0];
+          connectedScopeKeyRef.current = currentScopeKey;
+          await connectAsOperator(initialOp, ops);
+        } catch (err: any) {
+          if (connectEpochRef.current !== startEpoch) return;
           setConnectionStatus('error');
           setConnectionError(err?.message || 'Failed to load Nexconn communications.');
         }
+      })();
+
+      bootInFlightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (bootInFlightRef.current === run) {
+          bootInFlightRef.current = null;
+        }
       }
-    })();
+    },
+    [connectAsOperator, getIdToken, isOperationalRoute, teardownSessionState]
+  );
+
+  // Route-, Auth-, Logout-, and Tenant-aware lazy bootstrap (StrictMode-safe; never eager on public routes)
+  useEffect(() => {
+    if (authLoading) return;
+
+    const currentUid = firebaseUser?.uid || null;
+    if (currentUid) {
+      signedOutLatchRef.current = false;
+    } else if (prevFirebaseUidRef.current !== null) {
+      signedOutLatchRef.current = true;
+      connectEpochRef.current += 1;
+      bootInFlightRef.current = null;
+      prevFirebaseUidRef.current = null;
+      void teardownSessionState();
+      return;
+    }
+    prevFirebaseUidRef.current = currentUid;
+
+    if (!signedOutLatchRef.current) {
+      void bootstrapAndConnect(false);
+    }
+
+    const onRouteChange = () => {
+      if (!signedOutLatchRef.current) {
+        void bootstrapAndConnect(false);
+      }
+    };
+    const onTenantChange = () => {
+      connectEpochRef.current += 1;
+      bootInFlightRef.current = null;
+      void teardownSessionState().then(() => {
+        if (isOperationalRoute() && !signedOutLatchRef.current) {
+          void bootstrapAndConnect(true);
+        }
+      });
+    };
+    const onAuthLogout = () => {
+      signedOutLatchRef.current = true;
+      connectEpochRef.current += 1;
+      bootInFlightRef.current = null;
+      void teardownSessionState();
+    };
+
+    window.addEventListener('hashchange', onRouteChange);
+    window.addEventListener('popstate', onRouteChange);
+    window.addEventListener('gg-tenant-changed', onTenantChange);
+    window.addEventListener('gg-auth-logout', onAuthLogout);
 
     return () => {
-      cancelled = true;
+      connectEpochRef.current += 1;
+      bootInFlightRef.current = null;
+      clearTypingTimers();
+      window.removeEventListener('hashchange', onRouteChange);
+      window.removeEventListener('popstate', onRouteChange);
+      window.removeEventListener('gg-tenant-changed', onTenantChange);
+      window.removeEventListener('gg-auth-logout', onAuthLogout);
       void disconnectNexconnSession();
     };
-  }, [connectAsOperator]);
+  }, [authLoading, firebaseUser?.uid, bootstrapAndConnect, clearTypingTimers, isOperationalRoute, teardownSessionState]);
 
   const switchOperator = useCallback(
     async (operatorId: string) => {
       const target = directoryRef.current.find((o) => o.userId === operatorId);
       if (!target) return;
+      signedOutLatchRef.current = false;
       await connectAsOperator(target, directoryRef.current);
     },
     [connectAsOperator]
   );
 
   const reconnect = useCallback(async () => {
+    signedOutLatchRef.current = false;
     const current = activeOperatorRef.current || directoryRef.current[0];
-    if (!current) return;
-    await connectAsOperator(current, directoryRef.current);
-  }, [connectAsOperator]);
+    if (current && directoryRef.current.length > 0) {
+      await connectAsOperator(current, directoryRef.current);
+      return;
+    }
+    connectedScopeKeyRef.current = null;
+    await bootstrapAndConnect(true);
+  }, [bootstrapAndConnect, connectAsOperator]);
 
   const loadChannelHistory = useCallback(
     async (channelType: CommsChannelType, channelId: string, reset = false) => {
@@ -693,6 +1086,37 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [appendSentMessage, selectedChannel]
   );
 
+  const sendTextToChannel = useCallback(
+    async (channelType: CommsChannelType, channelId: string, text: string) => {
+      if (!channelId || !text.trim()) return;
+      const uid = activeOperatorRef.current?.userId || '';
+      const sent = await sendTextViaNexconn(channelType, channelId, text.trim(), uid);
+      appendSentMessage(sent);
+    },
+    [appendSentMessage]
+  );
+
+  const sendVoice = useCallback(
+    async (file: File) => {
+      if (!selectedChannel) return;
+      const uid = activeOperatorRef.current?.userId || '';
+      setUploadProgress(0);
+      try {
+        const sent = await sendVoiceViaNexconn(
+          selectedChannel.channelType,
+          selectedChannel.channelId,
+          file,
+          uid,
+          (pct) => setUploadProgress(pct)
+        );
+        appendSentMessage(sent);
+      } finally {
+        setUploadProgress(null);
+      }
+    },
+    [appendSentMessage, selectedChannel]
+  );
+
   const notifyTyping = useCallback(() => {
     if (!selectedChannel || selectedChannel.channelType !== 'direct') return;
     const now = Date.now();
@@ -701,47 +1125,104 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
     void sendTypingIndicator(selectedChannel.channelId);
   }, [selectedChannel]);
 
-  const startCall = useCallback(async (calleeId: string, mediaType: CallMediaKind) => {
-    setCallError(null);
-    const callee = operatorsByIdRef.current[calleeId];
-    const { callId } = await startNexconnCall(calleeId, mediaType);
-    setActiveCall({
-      callId,
-      direction: 'outgoing',
-      mediaType,
-      status: 'calling',
-      remoteUserId: calleeId,
-      remoteName: callee?.name || calleeId,
-      remoteRole: callee ? `${callee.role} • ${callee.station}` : undefined,
-      isMicEnabled: true,
-      isCameraEnabled: mediaType === 'video',
-      isRemoteMicMuted: false,
-      isRemoteCameraOff: mediaType !== 'video',
-      connectedAt: null,
-    });
+  const verifyCallMediaPermissions = useCallback(async (mediaType: CallMediaKind) => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error(
+        'Camera/microphone access requires a secure HTTPS browser context. Use 112 or VHF radio fallback.'
+      );
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: mediaType === 'video',
+      });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (err: any) {
+      const name = err?.name || '';
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        throw new Error(
+          mediaType === 'video'
+            ? 'Camera or microphone permission was denied. Allow access in browser settings or switch to Audio-Only / VHF.'
+            : 'Microphone permission was denied. Allow microphone access in browser settings to place a call.'
+        );
+      }
+      if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        throw new Error(
+          mediaType === 'video'
+            ? 'No camera or microphone detected on this device. Try Audio-Only or VHF radio.'
+            : 'No microphone detected on this device.'
+        );
+      }
+      if (name === 'NotReadableError') {
+        throw new Error('Camera or microphone is currently in use by another application.');
+      }
+      throw new Error(err?.message || 'Unable to access camera/microphone for call.');
+    }
   }, []);
+
+  const startCall = useCallback(
+    async (calleeId: string, mediaType: CallMediaKind) => {
+      setCallError(null);
+      try {
+        if (connectionStatusRef.current !== 'connected') {
+          throw new Error('Connect an authenticated Nexconn operator session before placing a call.');
+        }
+        const validation = validateNexconnCallTarget(calleeId, activeOperatorRef.current?.userId);
+        if (validation.ok === false) {
+          throw new Error(validation.error);
+        }
+        await verifyCallMediaPermissions(mediaType);
+        const callee = operatorsByIdRef.current[validation.targetId];
+        const { callId } = await startNexconnCall(validation.targetId, mediaType);
+        setActiveCall({
+          callId,
+          direction: 'outgoing',
+          mediaType,
+          status: 'calling',
+          remoteUserId: validation.targetId,
+          remoteName: callee?.name || validation.targetId,
+          remoteRole: callee ? `${callee.role} • ${callee.station}` : undefined,
+          isMicEnabled: true,
+          isCameraEnabled: mediaType === 'video',
+          isRemoteMicMuted: false,
+          isRemoteCameraOff: mediaType !== 'video',
+          connectedAt: null,
+        });
+      } catch (err: any) {
+        const message = err?.message || 'Unable to start Nexconn call.';
+        setCallError(message);
+        throw err;
+      }
+    },
+    [verifyCallMediaPermissions]
+  );
 
   const acceptIncomingCall = useCallback(async () => {
     if (!incomingCall) return;
     setCallError(null);
     const call = incomingCall;
-    await acceptNexconnCall(call.callId);
-    setIncomingCall(null);
-    setActiveCall({
-      callId: call.callId,
-      direction: 'incoming',
-      mediaType: call.mediaType,
-      status: 'connecting',
-      remoteUserId: call.callerUserId,
-      remoteName: call.callerName,
-      remoteRole: call.callerRole,
-      isMicEnabled: true,
-      isCameraEnabled: call.mediaType === 'video',
-      isRemoteMicMuted: false,
-      isRemoteCameraOff: call.mediaType !== 'video',
-      connectedAt: null,
-    });
-  }, [incomingCall]);
+    try {
+      await verifyCallMediaPermissions(call.mediaType);
+      await acceptNexconnCall(call.callId);
+      setIncomingCall(null);
+      setActiveCall({
+        callId: call.callId,
+        direction: 'incoming',
+        mediaType: call.mediaType,
+        status: 'connecting',
+        remoteUserId: call.callerUserId,
+        remoteName: call.callerName,
+        remoteRole: call.callerRole,
+        isMicEnabled: true,
+        isCameraEnabled: call.mediaType === 'video',
+        isRemoteMicMuted: false,
+        isRemoteCameraOff: call.mediaType !== 'video',
+        connectedAt: null,
+      });
+    } catch (err: any) {
+      setCallError(err?.message || 'Failed to accept incoming call.');
+    }
+  }, [incomingCall, verifyCallMediaPermissions]);
 
   const rejectIncomingCall = useCallback(async () => {
     if (!incomingCall) return;
@@ -812,8 +1293,10 @@ export const NexconnProvider: React.FC<{ children: React.ReactNode }> = ({ child
     createGroup,
     loadOlderMessages,
     sendText,
+    sendTextToChannel,
     sendImage,
     sendFile,
+    sendVoice,
     notifyTyping,
     startCall,
     acceptIncomingCall,

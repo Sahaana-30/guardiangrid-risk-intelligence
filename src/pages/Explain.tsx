@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ShapBars } from '../components/ShapBars';
 import { TierBadge } from '../components/TierBadge';
 import { ProvenanceTip } from '../components/ProvenanceTip';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   Sparkles,
   HelpCircle,
@@ -26,6 +28,8 @@ import {
 } from 'recharts';
 
 export const Explain: React.FC = () => {
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   const { sites, siteRisks, riskWeights } = useApp();
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>(sites[0]?.id || '');
@@ -63,7 +67,8 @@ export const Explain: React.FC = () => {
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {isStandalone && <BackNavButton fallbackPath="/analytics" />}
           <Sparkles className="w-5 h-5 text-[#0F766E]" />
           <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
             Explainable AI & SHAP Decomposition

@@ -1,4 +1,8 @@
 import type { Message } from '@nexconn/chat';
+import type {
+  AiSbarHandoffCardPayload,
+  SosTelemetryCardPayload,
+} from '../components/comms/NexconnEmergencyCards';
 
 export interface OperatorProfile {
   userId: string;
@@ -40,7 +44,14 @@ export interface CommsChannel {
   memberCount?: number;
 }
 
-export type CommsMessageKind = 'text' | 'image' | 'file' | 'system';
+export type CommsMessageKind =
+  | 'text'
+  | 'image'
+  | 'file'
+  | 'voice'
+  | 'system'
+  | 'sos_card'
+  | 'sbar_card';
 
 export interface CommsMessage {
   messageId: string;
@@ -63,9 +74,14 @@ export interface CommsMessage {
   fileName?: string;
   fileSize?: number;
   fileType?: string;
+  audioUrl?: string;
+  audioDuration?: number;
   uploadProgress?: number;
   readCount?: number;
   totalCount?: number;
+  sosCard?: SosTelemetryCardPayload;
+  sbarCard?: AiSbarHandoffCardPayload;
+  handoffMarker?: { reportId: string; incidentId: string };
   rawMessage?: Message<any>;
 }
 

@@ -539,8 +539,8 @@ const HANDLERS: Record<string, IntentHandler> = {
     const high = sites.filter((s) => s.tier === 'High' || s.tier === 'Severe').length;
     const med = sites.filter((s) => s.tier === 'Medium').length;
     const low = sites.filter((s) => s.tier === 'Low').length;
-    const avg = total ? Math.round(sites.reduce((sum, s) => sum + s.score, 0) / total) : 45;
-    const refresh = context.lastUpdated || 'recently';
+    const avg = total ? Math.round(sites.reduce((sum, s) => sum + s.score, 0) / total) : 0;
+    const refresh = context.lastUpdated || 'current sync';
 
     const text =
       `GuardianGrid is tracking ${total} monitored water bodies across the region (synced ${refresh}).\n\n` +
@@ -699,29 +699,37 @@ const HANDLERS: Record<string, IntentHandler> = {
   forecast: (context, entities) => {
     const site = entities.sites[0] || context.sites[0];
     const tf = entities.timeframe || 'tomorrow';
-    const siteName = site?.name || 'regional coastal waters';
-
-    // Check if site is an inland lake/reservoir
+    const siteName = site?.name || 'selected coastal location';
     const isLake = site && !site.isCoastal;
+    const siteForecast = site ? context.siteForecasts?.get(site.id) : undefined;
+    const daily = Array.isArray(siteForecast?.daily) ? siteForecast.daily : [];
+    const targetDay = tf === 'tomorrow' ? daily[1] || daily[0] : daily[daily.length - 1] || daily[0];
 
     let text = `Forecast intelligence for ${siteName} (${tf === 'tomorrow' ? 'Tomorrow' : 'Next 7 Days'}):\n\n`;
 
     if (isLake) {
+      const projScore = targetDay?.meanScore ?? targetDay?.maxScore ?? site?.score;
       text +=
-        `1. Inland Reservoir Modeling: Note that marine wave telemetry does not apply to enclosed freshwater lakes; ` +
-        `predictions derive from Open-Meteo precipitation, runoff discharge, and temperature models.\n` +
-        `2. Projected Index: Score expected to hold near ${site.score}/100 with low surface chop and negligible flood surge.\n` +
-        `3. Peak Exposure: Early afternoon hours exhibit peak visitor activity.\n\n`;
+        `1. Inland Freshwater Modeling: Marine wave telemetry does not apply to enclosed freshwater lakes; forecasts derive from Open-Meteo weather/precipitation models.\n` +
+        `2. Projected Index: ${projScore !== undefined ? `Open-Meteo forecast projects a risk index near ${projScore}/100.` : 'Forecast index unavailable until telemetry sync completes.'}\n` +
+        `3. Visitor Exposure Count: Unavailable (no verified visitor-count sensor connected).\n\n`;
+    } else if (targetDay) {
+      const projScore = targetDay.meanScore ?? targetDay.maxScore ?? site?.score;
+      const peakWave = targetDay.maxWaveHeight;
+      const peakWind = targetDay.maxWindGusts ?? targetDay.maxWindSpeed;
+      text +=
+        `1. Short-Term Outlook (${tf === 'tomorrow' ? 'Tomorrow' : 'Upcoming Week'}): Projected Open-Meteo risk index is ${projScore}/100 (range ${targetDay.minScore ?? projScore}-${targetDay.maxScore ?? projScore}).\n` +
+        `2. Hydrodynamic Forecast Vectors: Peak wave height ${peakWave != null ? `${peakWave.toFixed(1)}m` : 'Unavailable'}, peak wind ${peakWind != null ? `${Math.round(peakWind)} km/h` : 'Unavailable'}.\n` +
+        `3. In-Situ Tide Gauge: Unavailable (requires INCOIS or Port Authority gauge feed; not substituted by forecast models).\n\n`;
     } else {
-      const tomorrowScore = Math.min(100, Math.max(0, (site?.score || 50) + (tf === 'tomorrow' ? 3 : 5)));
       text +=
-        `1. Short-Term Outlook (${tf === 'tomorrow' ? 'Next 24-48 Hours' : 'Upcoming Week'}): Projected risk index is approximately ${tomorrowScore}/100.\n` +
-        `2. Hydrodynamic Vectors: Expect moderate wave heights (1.2m - 1.6m) and wind gusts up to 24 km/h during afternoon tidal shifts.\n` +
-        `3. Optimal Safety Window: Early morning hours before midday thermal winds provide the lowest surface turbulence.\n\n`;
+        `1. Short-Term Outlook: Current baseline index is ${site?.score ?? 'Unavailable'}/100.\n` +
+        `2. Open-Meteo 7-day forecast stream is not yet loaded or unavailable for this location.\n` +
+        `3. In-Situ Tide Gauge: Unavailable (requires INCOIS or Port Authority gauge feed).\n\n`;
     }
 
     text +=
-      `Recommendation: Plan aquatic activities for early morning hours when surf conditions are calmest, and check fresh Open-Meteo forecasts prior to departure.`;
+      `Recommendation: Review live Open-Meteo forecasts prior to entry and follow posted municipal lifeguard flags.`;
 
     return {
       text,
@@ -735,15 +743,32 @@ const HANDLERS: Record<string, IntentHandler> = {
   trend: (context, entities) => {
     const site = entities.sites[0] || context.sites[0];
     const siteName = site?.name || 'monitored waters';
-    const trend = site?.trendDirection || 'stable';
-    const delta = trend === 'worsening' ? '+4.2' : trend === 'improving' ? '-3.8' : '+0.5';
+    const siteForecast = site ? context.siteForecasts?.get(site.id) : undefined;
+    const daily = Array.isArray(siteForecast?.daily) ? siteForecast.daily : [];
+    const firstScore = daily[0]?.meanScore;
+    const lastScore = daily[daily.length - 1]?.meanScore;
+    const numericDelta =
+      typeof firstScore === 'number' && typeof lastScore === 'number'
+        ? lastScore - firstScore
+        : null;
+    const trend =
+      numericDelta !== null
+        ? numericDelta >= 4
+          ? 'worsening'
+          : numericDelta <= -4
+            ? 'improving'
+            : 'stable'
+        : site?.trendDirection || 'stable';
+    const deltaLabel =
+      numericDelta !== null
+        ? `${numericDelta >= 0 ? '+' : ''}${numericDelta} points across Open-Meteo 7-day outlook`
+        : 'multi-day forecast delta unavailable';
 
     const text =
-      `Risk trajectory for ${siteName} over the recent lookback window shows a **${trend}** pattern (${delta} points week-over-week):\n\n` +
-      `• 7-Day Variance: Baseline hydrodynamics shifted from seasonal norms due to ocean current and wind gust fluctuations.\n` +
-      `• Multi-Week Trajectory: 30-day and 90-day seasonal averages indicate current conditions remain within typical coastal ranges.\n` +
-      `• Primary Shifting Factor: Diurnal wind shifts and tidal cycle variance dictate the daily swings.\n\n` +
-      `Recommendation: Continue tracking the 7-day Risk Heatmap to catch sudden upward spikes before shoreline deployments.`;
+      `Risk trajectory for ${siteName} shows a **${trend}** pattern (${deltaLabel}):\n\n` +
+      `• Forecast Variance: Computed from Open-Meteo hourly marine/weather wind, gust, wave, and precipitation projections.\n` +
+      `• Tide-Gauge Water Level Trend: Unavailable (no in-situ coastal tide-gauge feed connected).\n\n` +
+      `Recommendation: Monitor the 7-Day Forecast view and active Command Center advisories for sudden weather shifts.`;
 
     return {
       text,
@@ -797,46 +822,67 @@ const HANDLERS: Record<string, IntentHandler> = {
 
     if (factor === 'waves') {
       if (isLake) {
-        factorValStr = 'Unavailable for inland enclosed lakes';
-        statusStr = 'Marine wave and swell buoy sensors apply strictly to open coastal marine bodies, not inland reservoirs.';
+        factorValStr = 'Not applicable to inland enclosed lakes';
+        statusStr = 'Marine wave and swell models apply strictly to open coastal marine bodies, not inland reservoirs.';
+      } else if (env?.waveHeight != null) {
+        const val = env.waveHeight;
+        factorValStr = `${val.toFixed(1)} meters (Open-Meteo Marine forecast)`;
+        statusStr = val >= 1.8 ? 'Heavy breaking surf' : val >= 1.2 ? 'Moderate coastal chop' : 'Calm, gentle surf';
       } else {
-        const val = env?.waveHeight != null ? env.waveHeight.toFixed(1) : '1.4';
-        factorValStr = `${val} meters`;
-        statusStr = parseFloat(val) >= 1.8 ? 'Heavy breaking surf' : parseFloat(val) >= 1.2 ? 'Moderate coastal chop' : 'Calm, gentle surf';
+        factorValStr = 'Unavailable';
+        statusStr = 'Live Open-Meteo marine wave forecast is currently unavailable for this location.';
       }
     } else if (factor === 'wind') {
-      const val = env?.windSpeed != null ? Math.round(env.windSpeed) : 22;
-      const gust = env?.windGusts != null ? Math.round(env.windGusts) : val + 8;
-      factorValStr = `${val} km/h (gusts up to ${gust} km/h)`;
-      statusStr = val >= 35 ? 'Strong gale winds' : val >= 20 ? 'Fresh coastal breeze' : 'Light breeze';
+      if (env?.windSpeed != null) {
+        const val = Math.round(env.windSpeed);
+        const gustStr = env?.windGusts != null ? ` (gusts up to ${Math.round(env.windGusts)} km/h)` : '';
+        factorValStr = `${val} km/h${gustStr}`;
+        statusStr = val >= 35 ? 'Strong gale winds' : val >= 20 ? 'Fresh coastal breeze' : 'Light breeze';
+      } else {
+        factorValStr = 'Unavailable';
+        statusStr = 'Wind telemetry is currently unavailable for this location.';
+      }
     } else if (factor === 'rain') {
-      const val = env?.precipitation != null ? env.precipitation.toFixed(1) : '0.0';
-      factorValStr = `${val} mm/h`;
-      statusStr = parseFloat(val) >= 5 ? 'Active heavy downpour' : parseFloat(val) > 0 ? 'Light showers' : 'Dry conditions';
+      if (env?.precipitation != null) {
+        const val = env.precipitation;
+        factorValStr = `${val.toFixed(1)} mm/h`;
+        statusStr = val >= 5 ? 'Active heavy downpour' : val > 0 ? 'Light showers' : 'Dry conditions';
+      } else {
+        factorValStr = 'Unavailable';
+        statusStr = 'Precipitation telemetry is currently unavailable for this location.';
+      }
     } else if (factor === 'current') {
       if (isLake) {
-        factorValStr = 'Negligible (lake surface)';
-        statusStr = 'Inland waters do not generate oceanic rip currents; surface movement driven by runoff discharge.';
+        factorValStr = 'Not applicable (inland freshwater)';
+        statusStr = 'Inland waters do not generate oceanic rip currents; surface flow relates to runoff discharge.';
+      } else if (env?.currentVelocity != null) {
+        const val = env.currentVelocity;
+        factorValStr = `${val.toFixed(2)} m/s (Open-Meteo Marine forecast)`;
+        statusStr = val >= 0.6 ? 'Hazardous longshore rip velocity' : 'Moderate coastal drift';
       } else {
-        const val = env?.currentVelocity != null ? env.currentVelocity.toFixed(2) : '0.42';
-        factorValStr = `${val} m/s`;
-        statusStr = parseFloat(val) >= 0.6 ? 'Hazardous longshore rip velocity' : 'Manageable tidal drift';
+        factorValStr = 'Unavailable';
+        statusStr = 'Ocean current velocity forecast is currently unavailable.';
       }
     } else if (factor === 'tide') {
-      factorValStr = 'Semi-diurnal coastal cycle';
-      statusStr = 'Incoming high tide raises breaking wave heights; caution advised near tidal sandbars.';
+      factorValStr = 'Unavailable (no in-situ coastal tide-gauge feed)';
+      statusStr =
+        'GuardianGrid does not have a live INCOIS or Port Authority tide-gauge stream connected. Model wave forecasts are never substituted for gauge readings.';
     } else {
-      const temp = env?.waterTemperature != null ? `${env.waterTemperature.toFixed(1)}°C` : '28.5°C';
-      factorValStr = temp;
-      statusStr = 'Comfortable tropical water temperature within standard bathing thresholds.';
+      if (env?.waterTemperature != null) {
+        factorValStr = `${env.waterTemperature.toFixed(1)}°C`;
+        statusStr = 'Open-Meteo sea surface temperature forecast.';
+      } else {
+        factorValStr = 'Unavailable';
+        statusStr = 'Water temperature telemetry is currently unavailable.';
+      }
     }
 
     const text =
-      `Live Environmental Telemetry for **${site?.name || 'Coastline'}**:\n\n` +
+      `Environmental Intelligence for **${site?.name || 'Coastline'}**:\n\n` +
       `• Parameter (${factor.toUpperCase()}): **${factorValStr}**.\n` +
-      `• Observation Status: ${statusStr}.\n` +
-      `• Model Significance: This parameter contributes directly to the site's overall ${site?.score || 50}/100 Risk Index.\n\n` +
-      `Recommendation: Factor observations are guidance only. Verify live water entry conditions with stationed municipal lifeguards.`;
+      `• Status: ${statusStr}\n` +
+      `• Model Context: Site Risk Index is ${site?.score ?? 'Unavailable'}/100.\n\n` +
+      `Recommendation: Forecast outputs provide operational guidance only. Verify live water entry conditions with stationed municipal lifeguards.`;
 
     return {
       text,
@@ -934,13 +980,25 @@ const HANDLERS: Record<string, IntentHandler> = {
     const sites = context.sites;
     const highRiskSites = sites.filter((s) => s.score >= 65);
     const highRiskUnpatrolled = highRiskSites.filter((s) => !s.lifeguardPresent);
+    const patrolledSites = sites.filter((s) => s.lifeguardPresent);
+    const unpatrolledSites = sites.filter((s) => !s.lifeguardPresent);
+    const avgPatrolledInfra = patrolledSites.length
+      ? Math.round(patrolledSites.reduce((acc, s) => acc + (s.infrastructureIndex ?? 0), 0) / patrolledSites.length)
+      : null;
+    const avgUnpatrolledInfra = unpatrolledSites.length
+      ? Math.round(unpatrolledSites.reduce((acc, s) => acc + (s.infrastructureIndex ?? 0), 0) / unpatrolledSites.length)
+      : null;
 
     const text =
       `Regional Safety Infrastructure & Fairness Audit:\n\n` +
       `• High-Risk Coverage: ${highRiskSites.length} elevated hazard sites identified; ${highRiskUnpatrolled.length} currently lack stationed municipal lifeguards.\n` +
-      `• Urban vs. Outlying Disparity: Urban beaches (Marina, Elliot's) feature safety indices above 75, whereas peripheral catchments average 35.\n` +
-      `• Emergency Proximity: Monitored locations are evaluated for nearest hospitals, police desks, and emergency call nodes.\n\n` +
-      `Recommendation: Authorities should prioritize deployable mobile lifeguard towers and emergency call posts at unpatrolled high-risk beaches.`;
+      `• Patrolled vs. Unpatrolled Infrastructure Index: ${
+        avgPatrolledInfra !== null && avgUnpatrolledInfra !== null
+          ? `Patrolled sites average ${avgPatrolledInfra}/100 vs. ${avgUnpatrolledInfra}/100 at unpatrolled sites.`
+          : 'Infrastructure comparison computed across available OSM site records.'
+      }\n` +
+      `• Emergency Proximity: Monitored locations are evaluated for nearest hospitals, police desks, and emergency call nodes via OpenStreetMap.\n\n` +
+      `Recommendation: Prioritize deployable mobile lifeguard towers and emergency call posts at unpatrolled high-risk shorelines.`;
 
     return {
       text,
@@ -1038,7 +1096,7 @@ const HANDLERS: Record<string, IntentHandler> = {
     const text =
       `Recommended Operational Actions for Municipal Authorities & Beach Patrols:\n\n` +
       `1. Warning Deployment: ${isHigh ? 'Raise red caution flags at primary access points' : 'Maintain standard yellow surveillance flags'}.\n` +
-      `2. Lifeguard Stationing: Concentrate mobile response craft near exposed sandbars during afternoon high-energy tidal windows.\n` +
+      `2. Lifeguard Stationing: Concentrate mobile response craft near exposed sandbars during peak surf and wind windows.\n` +
       `3. Public Notification: Broadcast automated safety advisories at civic boardwalk kiosks and piers.\n` +
       `4. Outlying Catchments: Inspect warning signage and lifebuoy stations at unpatrolled inland reservoirs.\n\n` +
       `Recommendation: Enforce restricted swimming hours around sunset and maintain continuous liaison with district disaster response units.`;
@@ -1286,13 +1344,7 @@ export function runGuardianAnalystSelfTest(customContext?: AnalystContext): {
   };
 }
 
-// Automatically expose on window for developer testing
+// Expose manual developer test helper without polluting runtime console on load
 if (typeof window !== 'undefined') {
   (window as any).__runGuardianAnalystSelfTest = runGuardianAnalystSelfTest;
-  // Trigger once in background dev console so developers see the immediate test log
-  try {
-    runGuardianAnalystSelfTest();
-  } catch {
-    // Ignore in SSR
-  }
 }

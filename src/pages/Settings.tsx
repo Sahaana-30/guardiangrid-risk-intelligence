@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { CITIES, DEFAULT_RISK_WEIGHTS } from '../config';
 import { WaterBodyType } from '../types';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   Settings as SettingsIcon,
   Sliders,
@@ -77,7 +78,8 @@ export const Settings: React.FC = () => {
     <div className="space-y-8 max-w-5xl mx-auto pb-16">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          <BackNavButton fallbackPath="/dashboard" />
           <SettingsIcon className="w-6 h-6 text-[#0F766E]" />
           <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
             System Configuration & Calibration

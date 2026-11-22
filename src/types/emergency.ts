@@ -8,16 +8,40 @@ export type IncidentState =
   | 'DISPATCHED'
   | 'EN_ROUTE'
   | 'ON_SCENE'
+  | 'VICTIM_RECOVERED'
   | 'MEDICAL_HANDOFF'
   | 'RESOLVED'
   | 'REJECTED';
+
+export type FieldResponderAction =
+  | 'EN_ROUTE'
+  | 'ON_SCENE'
+  | 'VICTIM_RECOVERED'
+  | 'REQUEST_BACKUP'
+  | 'REJECT_ASSIGNMENT';
 
 export type EmergencyLanguage = 'en' | 'ta';
 
 export type ResponderAvailability = 'available' | 'dispatched' | 'on_scene' | 'off_duty';
 
+export interface RegionSummary {
+  id: string;
+  organizationId: string;
+  code: string;
+  slug: string;
+  name: string;
+  stateOrTerritory: string;
+  country: string;
+  lat: number;
+  lon: number;
+  vhfChannel: string;
+  isActive: boolean;
+}
+
 export interface RescueCell {
   id: string;
+  regionId?: string;
+  regionName?: string;
   siteId: string;
   siteName: string;
   label: string;
@@ -28,10 +52,12 @@ export interface RescueCell {
   radiusMeters: number;
   vhfChannel: string;
   accessLandmark: string;
+  isProposed?: boolean;
 }
 
 export interface ResponderProfile {
   id: string;
+  regionId?: string;
   nexconnUserId: string;
   name: string;
   role: string;
@@ -43,7 +69,8 @@ export interface ResponderProfile {
   availability: ResponderAvailability;
   activeIncidentId: string | null;
   radioCallsign: string;
-  isSimulated: true;
+  isSimulated: boolean;
+  locationUpdatedAt?: string;
 }
 
 export interface AllocationFactor {
@@ -76,6 +103,7 @@ export interface AuditEvent {
 
 export interface EscalationState {
   active: boolean;
+  stage?: 'unverified_sos' | 'dispatched_ack';
   timeoutSeconds: number;
   deadlineIso: string;
   backupResponderId: string | null;
@@ -92,7 +120,10 @@ export interface LostChildDetails {
 
 export interface EmergencyIncident {
   id: string;
+  organizationId?: string;
   code: string;
+  regionId?: string;
+  regionName?: string;
   clientRequestId?: string;
   category: EmergencyCategory;
   severity: EmergencySeverity;
@@ -109,8 +140,11 @@ export interface EmergencyIncident {
   siteName: string;
   lat: number | null;
   lon: number | null;
-  gpsAccuracyMeters?: number | null;
+  gpsAccuracyMeters: number | null;
   locationSource: 'gps' | 'cell_qr' | 'manual';
+  locationQuality?: 'verified_gps' | 'low_accuracy_gps' | 'cell_qr_only' | 'missing_gps';
+  qrCellValid?: boolean;
+  arrivalVerification?: 'gps_verified' | 'manual_confirmed';
   hasPhotoAttachment: boolean;
   photoDataUrl?: string;
   hasVoiceNote: boolean;
@@ -130,6 +164,7 @@ export interface EmergencyIncident {
   acknowledgedAt?: string;
   enRouteAt?: string;
   onSceneAt?: string;
+  victimRecoveredAt?: string;
   resolvedAt?: string;
   closureSummary?: string;
   auditTrail: AuditEvent[];

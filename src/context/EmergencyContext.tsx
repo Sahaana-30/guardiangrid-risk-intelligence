@@ -49,12 +49,18 @@ interface EmergencyContextValue {
   }) => Promise<{ incident: EmergencyIncident; groupInviteSynced: boolean }>;
   updateIncidentStatus: (params: {
     incidentId: string;
-    nextState: IncidentState;
+    nextState?: IncidentState;
     actorId: string;
     actorName: string;
     actorRole: 'dispatcher' | 'responder';
     note?: string;
     acknowledgeOnly?: boolean;
+    requestBackup?: boolean;
+    rejectAssignment?: boolean;
+    clientRequestId?: string;
+    responderLat?: number | null;
+    responderLon?: number | null;
+    arrivalVerification?: EmergencyIncident['arrivalVerification'];
   }) => Promise<EmergencyIncident>;
   createNexconnGroupForIncident: (params: {
     incidentId: string;
@@ -76,7 +82,7 @@ export const EmergencyProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [incidents, setIncidents] = useState<EmergencyIncident[]>([]);
   const [responders, setResponders] = useState<ResponderProfile[]>([]);
   const [storageMeta, setStorageMeta] = useState<EmergencyStorageMeta | null>(null);
-  const [scopeFilter, setScopeFilter] = useState<'all' | 'real' | 'simulated'>('all');
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'real' | 'simulated'>('real');
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,6 +117,26 @@ export const EmergencyProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       void refreshIncidents();
     }, 4000);
     return () => window.clearInterval(interval);
+  }, [refreshIncidents]);
+
+  // Strict tenant isolation on workspace switch: immediately clear previous tenant data & reload
+  useEffect(() => {
+    const onTenantChanged = () => {
+      setIncidents([]);
+      setResponders([]);
+      setLoading(true);
+      void refreshIncidents();
+      fetchRescueCells()
+        .then((res) => {
+          setCells(res.cells);
+          setStorageMeta(res.storage);
+        })
+        .catch(() => {
+          setCells([]);
+        });
+    };
+    window.addEventListener('gg-tenant-changed', onTenantChanged);
+    return () => window.removeEventListener('gg-tenant-changed', onTenantChanged);
   }, [refreshIncidents]);
 
   const upsertIncident = useCallback((updated: EmergencyIncident) => {
@@ -157,12 +183,18 @@ export const EmergencyProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const updateIncidentStatus = useCallback(
     async (params: {
       incidentId: string;
-      nextState: IncidentState;
+      nextState?: IncidentState;
       actorId: string;
       actorName: string;
       actorRole: 'dispatcher' | 'responder';
       note?: string;
       acknowledgeOnly?: boolean;
+      requestBackup?: boolean;
+      rejectAssignment?: boolean;
+      clientRequestId?: string;
+      responderLat?: number | null;
+      responderLon?: number | null;
+      arrivalVerification?: EmergencyIncident['arrivalVerification'];
     }) => {
       const res = await updateIncidentStatusApi(params);
       upsertIncident(res.incident);
@@ -188,6 +220,7 @@ export const EmergencyProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       language: EmergencyLanguage;
     }) => {
       const { incident } = await triggerSimulatedSOSApi(params);
+      setScopeFilter((prev) => (prev === 'real' ? 'simulated' : prev));
       upsertIncident(incident);
       return incident;
     },

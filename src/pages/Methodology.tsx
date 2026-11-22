@@ -1,4 +1,6 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
+import { BackNavButton } from '../components/BackNavButton';
 import {
   BookOpen,
   CheckCircle2,
@@ -12,11 +14,14 @@ import {
 } from 'lucide-react';
 
 export const Methodology: React.FC = () => {
+  const location = useLocation();
+  const isStandalone = location.pathname !== '/analytics';
   return (
     <div className="space-y-10 max-w-5xl mx-auto pb-16">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {isStandalone && <BackNavButton fallbackPath="/analytics" />}
           <BookOpen className="w-6 h-6 text-[#0F766E]" />
           <h1 className="font-serif-heading text-3xl font-bold text-[#0B3B3C]">
             Scientific Methodology & Data Governance
